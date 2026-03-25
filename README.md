@@ -27,7 +27,7 @@ A full-year (Mar 2025 – Feb 2026) analysis of NYC Citi Bike ridership, coverin
 - Cross-dimensional EDA across time, space, weather, and user segments
 - Interactive dashboard with 18 Plotly charts across 8 pages
 
-**Tools:** Python · Pandas · NumPy · Matplotlib · Seaborn · Folium · Plotly · Streamlit · NOAA CDO API · Jupyter
+**Tools:** Python · Pandas · NumPy · Matplotlib · Seaborn · Folium · Plotly · Streamlit · OpenAI API · NOAA CDO API · Jupyter
 
 ---
 
@@ -73,10 +73,14 @@ build_app_data.py       ← clean, feature-engineer, aggregate
 
 ```
 citi_bike/
-├── app.py                          # Streamlit dashboard (8 pages, 18 charts)
+├── app.py                          # Streamlit dashboard (9 pages, 18+ charts + LLM agent)
 ├── build_app_data.py               # Reproduce data/app/*.csv from raw CSVs
 ├── requirements.txt
 ├── README.md
+│
+├── .streamlit/
+│   ├── config.toml                 # Theme config (committed)
+│   └── secrets.toml                # API keys — gitignored, create manually
 │
 ├── files/
 │   ├── 01_data_acquisition.ipynb   # Data pipeline notebook
@@ -92,19 +96,37 @@ citi_bike/
 └── maps/                           # Folium HTML interactive maps
 ```
 
-> Raw monthly CSVs (`data/YYYYMM-citibike-*/`) are gitignored. `data/app/` is the only data committed.
+> Raw monthly CSVs (`data/YYYYMM-citibike-*/`) are gitignored. `data/app/` is the only data committed. `.streamlit/secrets.toml` is gitignored and must be created manually.
 
 ---
 
 ## Setup & Usage
 
-### 1. Install dependencies
+### 1. Clone and install dependencies
 
 ```bash
+git clone https://github.com/skyexry/citi-bike.git
+cd citi-bike
 pip install -r requirements.txt
 ```
 
-### 2. Run the dashboard *(no raw data needed)*
+### 2. Configure secrets (required for the LLM agent)
+
+The **💬 Ask the Data** page calls the OpenAI API. Create the secrets file:
+
+```bash
+mkdir -p .streamlit
+```
+
+Then create `.streamlit/secrets.toml` with your key:
+
+```toml
+OPENAI_API_KEY = "sk-..."   # get one at platform.openai.com/api-keys
+```
+
+> This file is gitignored and will never be committed. The dashboard runs without it — only the Ask the Data page will show an error if the key is missing.
+
+### 3. Run the dashboard *(no raw data needed)*
 
 ```bash
 streamlit run app.py
@@ -112,7 +134,7 @@ streamlit run app.py
 
 The pre-built CSVs in `data/app/` are committed to the repo — the dashboard works immediately after cloning.
 
-### 3. Reproduce `data/app/` from raw CSVs
+### 4. Reproduce `data/app/` from raw CSVs *(optional)*
 
 Download the raw monthly folders from the [Citi Bike system data page](https://citibikenyc.com/system-data) into `data/`, then run:
 
@@ -134,7 +156,7 @@ Optional flags:
 --data-dir path/to/data    # custom raw data location
 ```
 
-### 4. Explore the EDA notebook
+### 5. Explore the EDA notebook
 
 ```bash
 jupyter lab files/02_eda.ipynb
