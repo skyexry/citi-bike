@@ -5,6 +5,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from pathlib import Path
+from openai import OpenAI
 
 # ── Paths ──
 BASE = Path(__file__).parent
@@ -79,6 +80,7 @@ page = st.sidebar.radio("Navigate", [
     "4 \u2014 Advanced / Cross-dim",
     "Interactive Map",
     "5 \u2014 Conclusions",
+    "\U0001f4ac Ask the Data",
 ])
 
 # ══════════════════════════════════════════════════════════
@@ -106,6 +108,121 @@ def gini(values):
     s = np.sort(values)
     n = len(s)
     return (2 * np.sum(np.arange(1, n + 1) * s) / (n * s.sum())) - (n + 1) / n
+
+# ── LLM Agent ──────────────────────────────────────────────
+_SYSTEM_PROMPT = """
+You are a data analyst for the NYC Citi Bike system.
+You help users interpret ridership data covering March 2025 – February 2026.
+
+## Dataset overview
+- ~28 million total trips across 2,352 active stations
+- Rider types: member (~80%), casual (~20%)
+- Bike types: electric (~70%), classic (~30%)
+- Weather: NOAA Central Park daily observations (temp, precipitation, snow, wind)
+
+## Available data (injected in each user message)
+- daily_stats: 365 rows, one per day — total_rides, member_rides, casual_rides,
+  electric_rides, avg_duration, pct_member, pct_electric, TAVG, PRCP, SNOW, season,
+  day_name, is_weekend
+- station_stats: 2,352 rows — station_name, total_departures, total_arrivals,
+  net_flow, lat, lng, pct_member
+- trips_sample: 100,000 individual trips — rideable_type, user_type, duration_min,
+  hour, day_of_week, season, rush_hour, start/end station
+
+## Instructions
+- Answer ONLY based on the data provided in the user message.
+- Always cite specific numbers from the data.
+- Be concise: 3–5 sentences or a short bullet list. No lengthy preamble.
+- If the data is insufficient to answer precisely, say so and suggest what to look at.
+- Do not invent statistics not present in the context.
+""".strip()
+
+
+def _build_user_prompt(question: str) -> str:
+    """Inject pre-computed data summaries as context for the LLM."""
+
+    # Daily stats summary
+    daily_desc = (
+        daily[["total_rides", "avg_duration", "pct_member",
+               "pct_electric", "pct_rush_hour", "TAVG", "PRCP", "SNOW"]]
+        .describe().round(1).to_string()
+    )
+
+    # Ridership by season
+    season_agg = (
+        daily.groupby("season")
+        .agg(
+            avg_rides    =("total_rides",  "mean"),
+            avg_duration =("avg_duration", "mean"),
+            avg_temp     =("TAVG",         "mean"),
+            pct_member   =("pct_member",   "mean"),
+            pct_electric =("pct_electric", "mean"),
+        )
+        .round(1).to_string()
+    )
+
+    # Ridership by day of week
+    dow_agg = (
+        daily.groupby("day_name")["total_rides"]
+        .agg(["mean", "median"]).round(0)
+        .reindex(["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"])
+        .to_string()
+    )
+
+    # Weather impact (rainy vs clear days)
+    rain_mask = daily["PRCP"].fillna(0) > 1.0
+    rain_rides  = daily.loc[rain_mask,  "total_rides"].mean()
+    clear_rides = daily.loc[~rain_mask, "total_rides"].mean()
+    snow_mask   = daily["SNOW"].fillna(0) > 0
+    snow_rides  = daily.loc[snow_mask,  "total_rides"].mean()
+
+    # Top 10 stations by departures
+    top_dep = (
+        stations.nlargest(10, "total_departures")
+        [["station_name", "total_departures", "net_flow", "pct_member"]]
+        .to_string(index=False)
+    )
+
+    # Most imbalanced stations
+    most_imbalanced = (
+        stations.reindex(stations["net_flow"].abs().nlargest(10).index)
+        [["station_name", "net_flow", "total_departures"]]
+        .to_string(index=False)
+    )
+
+    # Trip duration by user type
+    dur_summary = (
+        trips[trips["duration_min"].between(1, 60)]
+        .groupby("user_type")["duration_min"]
+        .describe(percentiles=[.5, .75, .9]).round(1)
+        .to_string()
+    )
+
+    return f"""Question: {question}
+
+--- DAILY STATS SUMMARY ---
+{daily_desc}
+
+--- RIDERSHIP BY SEASON ---
+{season_agg}
+
+--- RIDERSHIP BY DAY OF WEEK (avg daily rides) ---
+{dow_agg}
+
+--- WEATHER IMPACT ---
+Clear days avg rides : {clear_rides:,.0f}
+Rainy days avg rides : {rain_rides:,.0f}  (PRCP > 1mm)
+Snow  days avg rides : {snow_rides:,.0f}
+
+--- TOP 10 STATIONS BY DEPARTURES ---
+{top_dep}
+
+--- TOP 10 MOST IMBALANCED STATIONS (by |net_flow|) ---
+{most_imbalanced}
+
+--- TRIP DURATION BY RIDER TYPE (trips ≤ 60 min) ---
+{dur_summary}
+"""
 
 # ══════════════════════════════════════════════════════════
 # PAGE: OVERVIEW
@@ -1192,3 +1309,80 @@ elif page == "5 \u2014 Conclusions":
   rebalancing model.
 """)
     st.caption("Data covers Mar 2025 – Feb 2026. Sources: Citi Bike trip records (GBFS) + NOAA GHCND daily weather (Central Park station).")
+
+# ══════════════════════════════════════════════════════════
+# PAGE: ASK THE DATA (LLM Agent)
+# ══════════════════════════════════════════════════════════
+elif page == "\U0001f4ac Ask the Data":
+    st.title("\U0001f4ac Ask the Data")
+    st.caption(
+        "Ask questions in plain English — answers are grounded in the actual dataset. "
+        "Powered by GPT-4o-mini."
+    )
+
+    # ── API key check ───────────────────────────────────────
+    api_key = st.secrets.get("OPENAI_API_KEY", "")
+    if not api_key:
+        st.error(
+            "No OpenAI API key found. "
+            "Add `OPENAI_API_KEY = 'sk-...'` to `.streamlit/secrets.toml`."
+        )
+        st.stop()
+
+    client = OpenAI(api_key=api_key)
+
+    # ── Example questions ───────────────────────────────────
+    with st.expander("Example questions", expanded=False):
+        examples = [
+            "Which season has the highest casual rider share?",
+            "How much does rain reduce daily ridership?",
+            "What are the top 5 most imbalanced stations?",
+            "Do members or casual riders take longer trips on average?",
+            "Which day of the week has the fewest rides?",
+        ]
+        for q in examples:
+            if st.button(q, key=q):
+                st.session_state.setdefault("messages", [])
+                st.session_state["messages"].append({"role": "user", "content": q})
+                st.rerun()
+
+    st.divider()
+
+    # ── Chat history ────────────────────────────────────────
+    if "messages" not in st.session_state:
+        st.session_state["messages"] = []
+
+    for msg in st.session_state["messages"]:
+        with st.chat_message(msg["role"]):
+            st.write(msg["content"])
+
+    # ── Input ───────────────────────────────────────────────
+    if question := st.chat_input("Ask anything about the Citi Bike dataset..."):
+        st.session_state["messages"].append({"role": "user", "content": question})
+        with st.chat_message("user"):
+            st.write(question)
+
+        with st.chat_message("assistant"):
+            with st.spinner("Analyzing..."):
+                # Build messages: system + last 6 turns + current question with data context
+                history = st.session_state["messages"][:-1][-6:]
+                response = client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=[
+                        {"role": "system", "content": _SYSTEM_PROMPT},
+                        *history,
+                        {"role": "user",   "content": _build_user_prompt(question)},
+                    ],
+                    temperature=0.2,
+                    max_tokens=400,
+                )
+                answer = response.choices[0].message.content
+
+            st.write(answer)
+            st.session_state["messages"].append({"role": "assistant", "content": answer})
+
+    # ── Clear button ────────────────────────────────────────
+    if st.session_state.get("messages"):
+        if st.button("Clear conversation", type="secondary"):
+            st.session_state["messages"] = []
+            st.rerun()

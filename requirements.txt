@@ -26,5 +26,8 @@ notebook>=7.0
 jupyterlab>=4.0
 ipykernel>=6.0
 
+# LLM agent
+openai>=1.0
+
 # Optional: progress bars for large downloads
 tqdm>=4.65
