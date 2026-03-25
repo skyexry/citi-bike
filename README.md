@@ -1,7 +1,7 @@
 # Citi Bike NYC — Exploratory Data Analysis
 
 A full-year (Mar 2025 – Feb 2026) analysis of NYC Citi Bike ridership, covering data acquisition,
-cleaning, EDA, time-series forecasting, and an interactive Streamlit dashboard.
+cleaning, EDA, and an interactive Streamlit dashboard.
 
 ---
 
@@ -20,14 +20,11 @@ cleaning, EDA, time-series forecasting, and an interactive Streamlit dashboard.
 
 ## Project Overview
 
-**Goal:** Analyse how Citi Bike ridership varies by time, weather, geography, and rider segment —
-and build a foundation for demand forecasting and rebalancing optimisation.
+**Goal:** Analyse how Citi Bike ridership varies by time, weather, geography, and rider segment.
 
 **What this project demonstrates:**
 - End-to-end data pipeline from raw CSVs to analytics-ready tables
-- Five-section EDA spanning distributions, temporal patterns, spatial analysis, and advanced modelling
-- Holt-Winters time-series demand forecasting with seasonal decomposition
-- K-Means station behavioural clustering (commuter hubs / residential feeders / leisure stations)
+- Five-section EDA spanning distributions, temporal patterns, spatial analysis, and cross-dimensional analysis
 - Interactive Streamlit dashboard with Plotly charts and an LLM-powered Q&A agent
 
 **Tools:** Python · Pandas · NumPy · Matplotlib · Seaborn · Scipy · Plotly · Streamlit · OpenAI API · NOAA CDO API · Jupyter
