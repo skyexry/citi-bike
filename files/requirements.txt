@@ -9,6 +9,10 @@ scipy>=1.10
 # Visualization
 matplotlib>=3.7
 seaborn>=0.12
+plotly>=5.0
+
+# Streamlit app
+streamlit>=1.30
 
 # Geospatial / interactive maps
 folium>=0.14          # interactive Leaflet maps
