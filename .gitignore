@@ -1,6 +1,8 @@
 .DS_Store
-data/
-*.csv
-*.parquet
 __pycache__/
 .venv/
+*.parquet
+
+data/*
+!data/app/
+!data/app/*.csv
