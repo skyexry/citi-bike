@@ -80,7 +80,7 @@ citi_bike/
 │
 ├── .streamlit/
 │   ├── config.toml                 # Theme config (committed)
-│   └── secrets.toml                # API keys — replace with your actual key
+│   └── secrets.toml                # API keys — gitignored, create manually
 │
 ├── files/
 │   ├── 01_data_acquisition.ipynb   # Data pipeline notebook
