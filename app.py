@@ -38,12 +38,44 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 st.markdown("""<style>
-.block-container{padding-top:1.5rem;}
-h1,h2,h3{color:#2C3E50;font-family:'Helvetica Neue',sans-serif;}
-.finding-box{background:#f0f4f8;border-left:4px solid #2980b9;
-             padding:.75rem 1rem;margin:.5rem 0;border-radius:4px;}
-.rec-box{background:#f0faf0;border-left:4px solid #27ae60;
-         padding:.75rem 1rem;margin:.5rem 0;border-radius:4px;}
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
+
+.block-container { padding-top: 2rem; padding-bottom: 2rem; max-width: 1200px; }
+
+h1 { font-size: 1.9rem; font-weight: 700; color: #0F172A; margin-bottom: .25rem; }
+h2 { font-size: 1.3rem; font-weight: 600; color: #1E293B; }
+h3 { font-size: 1.1rem; font-weight: 600; color: #334155; }
+
+[data-testid="stSidebar"] { background: #0F172A !important; }
+[data-testid="stSidebar"] * { color: #CBD5E1 !important; }
+[data-testid="stSidebar"] .stRadio label:hover { background: rgba(255,255,255,.08); border-radius: 6px; }
+
+[data-testid="stMetric"] {
+    background: #F8FAFC; border: 1px solid #E2E8F0;
+    border-radius: 10px; padding: .9rem 1.1rem;
+    box-shadow: 0 1px 3px rgba(0,0,0,.06);
+}
+[data-testid="stMetricValue"] { font-size: 1.6rem !important; font-weight: 700 !important; color: #0F172A !important; }
+[data-testid="stMetricLabel"] { font-size: .78rem !important; font-weight: 500 !important; color: #64748B !important; text-transform: uppercase; letter-spacing: .04em; }
+
+hr { border-color: #E2E8F0; margin: 1.5rem 0; }
+
+.finding-box {
+    background: #EFF6FF; border-left: 4px solid #2196F3;
+    padding: .85rem 1.1rem; margin: .6rem 0;
+    border-radius: 0 8px 8px 0; font-size: .9rem; line-height: 1.6;
+}
+.rec-box {
+    background: #F0FDF4; border-left: 4px solid #22C55E;
+    padding: .85rem 1.1rem; margin: .6rem 0;
+    border-radius: 0 8px 8px 0; font-size: .9rem; line-height: 1.6;
+}
+
+[data-testid="stExpander"] { border: 1px solid #E2E8F0 !important; border-radius: 10px !important; }
+[data-testid="stDataFrame"] { border: 1px solid #E2E8F0; border-radius: 10px; overflow: hidden; }
+.stCaption, [data-testid="stCaptionContainer"] { color: #94A3B8 !important; font-size: .8rem !important; }
 </style>""", unsafe_allow_html=True)
 
 # ══════════════════════════════════════════════════════════
@@ -70,8 +102,18 @@ SEASON_ORDER = [s for s in ["Spring", "Summer", "Fall", "Winter"]
                 if s in daily["season"].values]
 
 # ── Sidebar ──
-st.sidebar.title("Citi Bike EDA")
-page = st.sidebar.radio("Navigate", [
+st.sidebar.markdown("""
+<div style="padding:.5rem 0 1.2rem 0;">
+  <div style="font-size:1.3rem;font-weight:700;color:#F8FAFC;letter-spacing:-.01em;">
+    🚲 Citi Bike NYC
+  </div>
+  <div style="font-size:.75rem;color:#64748B;margin-top:.2rem;">
+    Mar 2025 – Feb 2026
+  </div>
+</div>
+""", unsafe_allow_html=True)
+
+page = st.sidebar.radio("", [
     "Overview",
     "Raw Data Explorer",
     "1 \u2014 Distributions",
@@ -1331,6 +1373,34 @@ elif page == "\U0001f4ac Ask the Data":
 
     client = OpenAI(api_key=api_key)
 
+    # ── Session state init ──────────────────────────────────
+    if "messages" not in st.session_state:
+        st.session_state["messages"] = []
+
+    # ── Helper: call API and append response ────────────────
+    def _get_answer(question: str) -> str:
+        from openai import RateLimitError, AuthenticationError, APIError
+        history = [m for m in st.session_state["messages"]
+                   if m["content"] != question][-6:]
+        try:
+            response = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {"role": "system", "content": _SYSTEM_PROMPT},
+                    *history,
+                    {"role": "user",   "content": _build_user_prompt(question)},
+                ],
+                temperature=0.2,
+                max_tokens=400,
+            )
+            return response.choices[0].message.content
+        except RateLimitError:
+            return "⚠️ OpenAI quota exceeded. Please add credits at platform.openai.com/settings/billing."
+        except AuthenticationError:
+            return "⚠️ Invalid API key. Check your `.streamlit/secrets.toml`."
+        except APIError as e:
+            return f"⚠️ OpenAI API error: {e}"
+
     # ── Example questions ───────────────────────────────────
     with st.expander("Example questions", expanded=False):
         examples = [
@@ -1342,44 +1412,35 @@ elif page == "\U0001f4ac Ask the Data":
         ]
         for q in examples:
             if st.button(q, key=q):
-                st.session_state.setdefault("messages", [])
                 st.session_state["messages"].append({"role": "user", "content": q})
-                st.rerun()
+                st.session_state["_pending"] = q
 
     st.divider()
 
-    # ── Chat history ────────────────────────────────────────
-    if "messages" not in st.session_state:
-        st.session_state["messages"] = []
-
+    # ── Display chat history ─────────────────────────────────
     for msg in st.session_state["messages"]:
         with st.chat_message(msg["role"]):
             st.write(msg["content"])
 
-    # ── Input ───────────────────────────────────────────────
+    # ── Handle pending question from button click ────────────
+    if "_pending" in st.session_state:
+        question = st.session_state.pop("_pending")
+        with st.chat_message("assistant"):
+            with st.spinner("Analyzing..."):
+                answer = _get_answer(question)
+            st.write(answer)
+        st.session_state["messages"].append({"role": "assistant", "content": answer})
+
+    # ── Handle new input from chat box ───────────────────────
     if question := st.chat_input("Ask anything about the Citi Bike dataset..."):
         st.session_state["messages"].append({"role": "user", "content": question})
         with st.chat_message("user"):
             st.write(question)
-
         with st.chat_message("assistant"):
             with st.spinner("Analyzing..."):
-                # Build messages: system + last 6 turns + current question with data context
-                history = st.session_state["messages"][:-1][-6:]
-                response = client.chat.completions.create(
-                    model="gpt-4o-mini",
-                    messages=[
-                        {"role": "system", "content": _SYSTEM_PROMPT},
-                        *history,
-                        {"role": "user",   "content": _build_user_prompt(question)},
-                    ],
-                    temperature=0.2,
-                    max_tokens=400,
-                )
-                answer = response.choices[0].message.content
-
+                answer = _get_answer(question)
             st.write(answer)
-            st.session_state["messages"].append({"role": "assistant", "content": answer})
+        st.session_state["messages"].append({"role": "assistant", "content": answer})
 
     # ── Clear button ────────────────────────────────────────
     if st.session_state.get("messages"):

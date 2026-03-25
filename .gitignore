@@ -3,6 +3,7 @@ __pycache__/
 .venv/
 *.parquet
 .streamlit/secrets.toml
+!.streamlit/config.toml
 
 data/*
 !data/app/
