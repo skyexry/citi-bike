@@ -8,7 +8,7 @@ from pathlib import Path
 
 # ── Paths ──
 BASE = Path(__file__).parent
-DATA = BASE / "data" / "processed"
+DATA = BASE / "data" / "app"
 MAPS = BASE / "maps"
 
 # ── Colour palette (matches notebook) ──
