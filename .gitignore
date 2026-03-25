@@ -6,3 +6,6 @@ __pycache__/
 data/*
 !data/app/
 !data/app/*.csv
+
+data/citibike.db
+data/raw/
