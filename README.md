@@ -144,11 +144,12 @@ jupyter lab files/02_eda.ipynb
 
 ## EDA Coverage
 
-### Section 1 — Ride-Type & Duration Distributions
-- Member vs. casual rider split (share of trips and ride time)
-- Bike-type preference (classic vs. electric) by rider type
-- Trip duration distribution (log scale) with percentile markers
-- Member/casual duration comparison (violin + box)
+### Section 1 — Data Overview & Quality Assessment
+- Missing value check and data completeness summary
+- Key summary statistics (mean, median, min, max, std per metric)
+- Rider & bike type composition: member/casual and electric/classic splits (pie charts)
+- Distribution overview: daily rides, avg duration, temperature, station departures, net flow, trip duration — with mean/median reference lines
+- Trip duration by rider type: violin + box plot comparison (member vs. casual)
 
 ### Section 2 — Temporal Patterns
 - Daily ridership time series with 7-day rolling average

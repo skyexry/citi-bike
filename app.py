@@ -201,26 +201,117 @@ elif page == "Raw Data Explorer":
 elif page == "1 \u2014 Distributions":
     st.title("Section 1: Data Overview & Distributions")
 
-    fig = make_subplots(rows=2, cols=3, subplot_titles=[
-        "Daily Total Rides", "Daily Avg Duration (min)", "Daily Avg Temperature (°C)",
-        "Station Total Departures", "Station Net Flow (clipped ±500)", "Trip Duration (min, <60)"])
+    # ── 1a. Rider & bike type composition ──────────────────
+    st.subheader("Fleet & Rider Composition")
+    member_pct   = daily["pct_member"].mean()
+    casual_pct   = daily["pct_casual"].mean()
+    electric_pct = daily["pct_electric"].mean()
+    classic_pct  = 100 - electric_pct
 
-    fig.add_trace(go.Histogram(x=daily["total_rides"], marker_color=C_MEMBER,
-                               nbinsx=30, name="Daily rides", showlegend=False), row=1, col=1)
-    fig.add_trace(go.Histogram(x=daily["avg_duration"], marker_color=C_GREEN,
-                               nbinsx=30, name="Avg duration", showlegend=False), row=1, col=2)
-    fig.add_trace(go.Histogram(x=daily["TAVG"].dropna(), marker_color=C_RED,
-                               nbinsx=25, name="Temp", showlegend=False), row=1, col=3)
-    fig.add_trace(go.Histogram(x=stations["total_departures"], marker_color=C_MEMBER,
-                               nbinsx=50, name="Departures", showlegend=False), row=2, col=1)
-    fig.add_trace(go.Histogram(x=stations["net_flow"].clip(-500, 500), marker_color=C_PURPLE,
-                               nbinsx=50, name="Net flow", showlegend=False), row=2, col=2)
-    fig.add_trace(go.Histogram(x=trips["duration_min"].clip(0, 60), marker_color=C_CASUAL,
-                               nbinsx=60, name="Duration", showlegend=False), row=2, col=3)
+    fig_pie = make_subplots(rows=1, cols=2, specs=[[{"type": "pie"}, {"type": "pie"}]],
+                            subplot_titles=["Rider Type Split", "Bike Type Split"])
+    fig_pie.add_trace(go.Pie(
+        labels=["Member", "Casual"], values=[member_pct, casual_pct],
+        marker_colors=[C_MEMBER, C_CASUAL],
+        textinfo="label+percent", hole=0.35, showlegend=False,
+    ), row=1, col=1)
+    fig_pie.add_trace(go.Pie(
+        labels=["Electric", "Classic"], values=[electric_pct, classic_pct],
+        marker_colors=["#43A047", C_GREY],
+        textinfo="label+percent", hole=0.35, showlegend=False,
+    ), row=1, col=2)
+    fig_pie.update_layout(**PLOTLY_LAYOUT, height=340,
+                          title_text="Yearly average across 365 days")
+    st.plotly_chart(fig_pie, use_container_width=True)
 
-    fig.update_traces(marker_line_width=0, opacity=0.85)
-    fig.update_layout(**PLOTLY_LAYOUT, height=550, title_text="Distribution Overview")
-    st.plotly_chart(fig, use_container_width=True)
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Member share",   f"{member_pct:.1f}%")
+    col2.metric("Casual share",   f"{casual_pct:.1f}%")
+    col3.metric("Electric share", f"{electric_pct:.1f}%")
+    col4.metric("Classic share",  f"{classic_pct:.1f}%")
+
+    st.divider()
+
+    # ── 1b. Distribution overview (with mean / median lines) ─
+    st.subheader("Distribution Overview")
+
+    panels = [
+        (daily["total_rides"],                "Daily Total Rides",          "Rides",      C_MEMBER, 30),
+        (daily["avg_duration"],               "Daily Avg Duration (min)",   "Minutes",    C_GREEN,  30),
+        (daily["TAVG"].dropna(),              "Daily Avg Temp (°C)",        "Temp (°C)",  C_RED,    25),
+        (stations["total_departures"],        "Station Departures",         "Departures", C_MEMBER, 50),
+        (stations["net_flow"].clip(-500,500), "Station Net Flow (±500)",    "Net Flow",   C_PURPLE, 50),
+        (trips["duration_min"].clip(0, 60),   "Trip Duration (≤ 60 min)",   "Minutes",    C_CASUAL, 50),
+    ]
+
+    fig_dist = make_subplots(rows=2, cols=3,
+                             subplot_titles=[p[1] for p in panels])
+    positions = [(1,1),(1,2),(1,3),(2,1),(2,2),(2,3)]
+
+    for (s, title, xlabel, color, nbins), (r, c) in zip(panels, positions):
+        mean_val   = float(s.mean())
+        median_val = float(s.median())
+        fig_dist.add_trace(
+            go.Histogram(x=s, nbinsx=nbins, marker_color=color,
+                         opacity=0.85, showlegend=False, name=title),
+            row=r, col=c,
+        )
+        for val, dash, label in [
+            (mean_val,   "dash",  f"Mean {mean_val:,.1f}"),
+            (median_val, "solid", f"Median {median_val:,.1f}"),
+        ]:
+            fig_dist.add_vline(
+                x=val, line_dash=dash, line_color="black", line_width=1.5,
+                annotation_text=label, annotation_font_size=9,
+                annotation_position="top right",
+                row=r, col=c,
+            )
+
+    fig_dist.update_traces(marker_line_width=0)
+    fig_dist.update_layout(**PLOTLY_LAYOUT, height=560,
+                           title_text="— solid = median   · · · dashed = mean")
+    st.plotly_chart(fig_dist, use_container_width=True)
+
+    st.divider()
+
+    # ── 1c. Trip duration by rider type ────────────────────
+    st.subheader("Trip Duration by Rider Type")
+
+    dur = trips[trips["duration_min"].between(1, 60)].copy()
+    fig_vio = make_subplots(rows=1, cols=2,
+                            subplot_titles=["Violin", "Box"])
+
+    for user, color in [("member", C_MEMBER), ("casual", C_CASUAL)]:
+        sub = dur[dur["user_type"] == user]["duration_min"]
+        label = user.capitalize()
+        fig_vio.add_trace(
+            go.Violin(y=sub, name=label, fillcolor=color, line_color=color,
+                      opacity=0.75, box_visible=True, meanline_visible=True,
+                      showlegend=False),
+            row=1, col=1,
+        )
+        fig_vio.add_trace(
+            go.Box(y=sub, name=label, marker_color=color,
+                   boxmean="sd", showlegend=False),
+            row=1, col=2,
+        )
+
+    fig_vio.update_layout(**PLOTLY_LAYOUT, height=420,
+                          title_text="Trips ≤ 60 min  |  blue = Member · orange = Casual")
+    fig_vio.update_yaxes(title_text="Duration (min)")
+    st.plotly_chart(fig_vio, use_container_width=True)
+
+    # Duration summary table
+    dur["Rider Type"] = dur["user_type"].str.capitalize()
+    summary = (
+        dur.groupby("Rider Type")["duration_min"]
+        .describe(percentiles=[.25, .5, .75, .9])
+        .round(1)
+        .rename(columns={"count": "n", "mean": "Mean", "std": "Std",
+                         "min": "Min", "25%": "P25", "50%": "Median",
+                         "75%": "P75", "90%": "P90", "max": "Max"})
+    )
+    st.dataframe(summary, use_container_width=True)
 
 # ══════════════════════════════════════════════════════════
 # PAGE: SECTION 2 — TEMPORAL
