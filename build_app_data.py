@@ -271,8 +271,10 @@ def build_daily(df: pd.DataFrame, df_weather: pd.DataFrame) -> pd.DataFrame:
 
 
 def build_stations(df: pd.DataFrame) -> pd.DataFrame:
+    # Group by station_name (not station_id) so that multiple dock groups
+    # at the same physical location are merged into a single row.
     dep = (
-        df.groupby(["start_station_id", "start_station_name"])
+        df.groupby("start_station_name")
         .agg(
             total_departures = ("ride_id",      "count"),
             member_dep       = ("user_type",     lambda x: (x == "member").sum()),
@@ -283,15 +285,18 @@ def build_stations(df: pd.DataFrame) -> pd.DataFrame:
             avg_duration     = ("duration_min",  "mean"),
         )
         .reset_index()
-        .rename(columns={"start_station_id": "station_id",
-                         "start_station_name": "station_name"})
+        .rename(columns={"start_station_name": "station_name"})
     )
+    # Map end_station_id → end_station_name for arrivals, then aggregate by name
+    id_to_name = df[["end_station_id", "end_station_name"]].dropna().drop_duplicates("end_station_id")
     arr = (
-        df.groupby("end_station_id").size()
+        df.merge(id_to_name, on="end_station_id", how="left")
+        .groupby("end_station_name")
+        .size()
         .reset_index(name="total_arrivals")
-        .rename(columns={"end_station_id": "station_id"})
+        .rename(columns={"end_station_name": "station_name"})
     )
-    stations = pd.merge(dep, arr, on="station_id", how="left").fillna(0)
+    stations = pd.merge(dep, arr, on="station_name", how="left").fillna(0)
     stations["net_flow"]     = (stations["total_arrivals"] - stations["total_departures"]).astype(int)
     stations["pct_member"]   = (stations["member_dep"] / stations["total_departures"] * 100).round(2)
     stations["avg_duration"] = stations["avg_duration"].round(2)

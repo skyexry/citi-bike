@@ -119,7 +119,7 @@ page = st.sidebar.radio("", [
     "1 \u2014 Distributions",
     "2 \u2014 Temporal Patterns",
     "3 \u2014 Spatial Analysis",
-    "4 \u2014 Advanced / Cross-dim",
+    "4 \u2014 Advanced Analysis",
     "Interactive Map",
     "5 \u2014 Conclusions",
     "\U0001f4ac Ask the Data",
@@ -157,7 +157,7 @@ You are a data analyst for the NYC Citi Bike system.
 You help users interpret ridership data covering March 2025 – February 2026.
 
 ## Dataset overview
-- ~28 million total trips across 2,352 active stations
+- ~28 million total trips across 2,250 active stations
 - Rider types: member (~80%), casual (~20%)
 - Bike types: electric (~70%), classic (~30%)
 - Weather: NOAA Central Park daily observations (temp, precipitation, snow, wind)
@@ -166,7 +166,7 @@ You help users interpret ridership data covering March 2025 – February 2026.
 - daily_stats: 365 rows, one per day — total_rides, member_rides, casual_rides,
   electric_rides, avg_duration, pct_member, pct_electric, TAVG, PRCP, SNOW, season,
   day_name, is_weekend
-- station_stats: 2,352 rows — station_name, total_departures, total_arrivals,
+- station_stats: 2,250 rows — station_name, total_departures, total_arrivals,
   net_flow, lat, lng, pct_member
 - trips_sample: 100,000 individual trips — rideable_type, user_type, duration_min,
   hour, day_of_week, season, rush_hour, start/end station
@@ -272,6 +272,17 @@ Snow  days avg rides : {snow_rides:,.0f}
 if page == "Overview":
     st.title("Citi Bike NYC \u2014 Exploratory Data Analysis")
     st.markdown("**Mar 2025 \u2013 Feb 2026** | Trip-level, daily-aggregate, and station-level data")
+
+    st.markdown("""
+This dashboard presents a full-year analysis of NYC Citi Bike ridership across four analytical dimensions:
+
+| Section | Focus |
+|---|---|
+| **1 — Distributions** | Rider composition, bike type splits, trip duration profiles |
+| **2 — Temporal** | Seasonal arc, commuter vs. leisure profiles, weather elasticity, electric adoption |
+| **3 — Spatial** | Busiest stations, chronic imbalance (imbalance ratio), geographic clustering, AM/PM reversal |
+| **4 — Advanced** | Hour × day demand surface, weather sensitivity by segment, Holt-Winters forecasting, K-Means station clustering |
+""")
     st.markdown("---")
 
     c1, c2, c3, c4 = st.columns(4)
@@ -503,7 +514,8 @@ elif page == "2 \u2014 Temporal Patterns":
         "2e \u2014 Weather Correlation":
             "Three panels quantifying how weather drives demand: (1) temperature vs. total "
             "daily rides with an OLS regression line — points are coloured by rain status; "
-            "(2) precipitation vs. rides, with a separate regression fit on rainy days only; "
+            "(2) box plot comparing daily rides on Clear, Rainy, and Snowy days, with median "
+            "and sample size annotated; "
             "(3) a correlation heatmap of all weather variables against key ride metrics. "
             "The regression slope (rides per °C) and Pearson r are shown in the legend.",
         "2f \u2014 Rush Hour":
@@ -699,18 +711,24 @@ elif page == "2 \u2014 Temporal Patterns":
                                  name=f"r={r:.3f}, {slope:,.0f} rides/°C",
                                  showlegend=True), row=1, col=1)
 
-        # (b) Precipitation scatter
-        rainy = wx[wx["PRCP"] > 0]
-        fig.add_trace(go.Scatter(x=wx["PRCP"], y=wx["total_rides"], mode="markers",
-                                 marker=dict(color=C_MEMBER, size=6, opacity=0.6),
-                                 name="Days (precip)", showlegend=False,
-                                 hovertemplate="Precip: %{x:.1f}mm<br>Rides: %{y:,.0f}"), row=1, col=2)
-        if len(rainy) > 5:
-            xs2, ys2, r2 = reg_line(rainy["PRCP"].values, rainy["total_rides"].values)
-            fig.add_trace(go.Scatter(x=xs2, y=ys2, mode="lines",
-                                     line=dict(color=C_RED, width=2, dash="dash"),
-                                     name=f"r={r2:.3f} (rainy only)",
-                                     showlegend=True), row=1, col=2)
+        # (b) Box plot: Clear / Rainy / Snowy
+        def _wtype(row):
+            if row.get("is_snowy", 0) == 1: return "Snowy"
+            if row.get("is_rainy", 0) == 1: return "Rainy"
+            return "Clear"
+        wx = wx.copy()
+        wx["weather_type"] = wx.apply(_wtype, axis=1)
+        wt_order  = ["Clear", "Rainy", "Snowy"]
+        wt_colors = {"Clear": C_MEMBER, "Rainy": C_GREY, "Snowy": C_PURPLE}
+        for wt in wt_order:
+            grp = wx[wx["weather_type"] == wt]["total_rides"]
+            if len(grp) == 0:
+                continue
+            fig.add_trace(go.Box(y=grp, name=f"{wt} (n={len(grp)})",
+                                 marker_color=wt_colors[wt],
+                                 boxmean=False,
+                                 hovertemplate=f"{wt}<br>Rides: %{{y:,.0f}}"),
+                          row=1, col=2)
 
         # (c) Correlation heatmap
         corr_cols = [c for c in ["TAVG","TMAX","TMIN","PRCP","SNOW","AWND"] if c in wx.columns]
@@ -728,18 +746,19 @@ elif page == "2 \u2014 Temporal Patterns":
         fig.update_yaxes(title_text="Daily Rides", row=1, col=1)
         fig.update_yaxes(title_text="Daily Rides", row=1, col=2)
         fig.update_xaxes(title_text="Avg Temp (°C)", row=1, col=1)
-        fig.update_xaxes(title_text="Precipitation (mm)", row=1, col=2)
+        fig.update_xaxes(title_text="Weather Type", row=1, col=2)
         st.plotly_chart(fig, use_container_width=True)
 
         if "is_rainy" in wx.columns:
-            dry = wx[wx["is_rainy"]==0]["total_rides"].mean()
-            wet = wx[wx["is_rainy"]==1]["total_rides"].mean()
-            st.caption(
-                f"Rain penalty: {(dry-wet)/dry*100:.1f}% fewer rides on rainy days "
-                f"(dry-day mean: {dry:,.0f}  vs  rainy-day mean: {wet:,.0f}). "
-                "This effect is roughly binary — light and heavy rain cause similar drops, "
-                "suggesting riders decide whether to ride rather than how much to ride."
-            )
+            clear = wx[wx["weather_type"]=="Clear"]["total_rides"]
+            rainy = wx[wx["weather_type"]=="Rainy"]["total_rides"]
+            snowy = wx[wx["weather_type"]=="Snowy"]["total_rides"]
+            parts = [f"Rain penalty: {(clear.mean()-rainy.mean())/clear.mean()*100:.1f}% "
+                     f"(clear median {clear.median():,.0f} vs rainy {rainy.median():,.0f})"]
+            if len(snowy) > 2:
+                parts.append(f"Snow penalty: {(clear.mean()-snowy.mean())/clear.mean()*100:.1f}% "
+                              f"(snowy median {snowy.median():,.0f}, n={len(snowy)})")
+            st.caption("  ·  ".join(parts))
 
     # ── 2f: Rush Hour ──
     elif sub.startswith("2f"):
@@ -857,101 +876,169 @@ elif page == "3 \u2014 Spatial Analysis":
     st.title("Section 3: Spatial Analysis")
 
     CHART_DESCS = {
-        "3a \u2014 Top Imbalanced Stations":
-            "Horizontal bar charts showing the 15 stations with the most extreme chronic net flow "
-            "over the full 12-month period. Net flow = total arrivals − total departures. "
-            "Negative (red, left panel) = net exporters: bikes consistently drain away and trucks "
-            "must replenish them. Positive (blue, right panel) = net importers: bikes accumulate "
-            "and must be removed. These stations are the primary targets for rebalancing operations.",
-        "3b \u2014 Imbalance Map":
-            "Geographic scatter of all stations across NYC. Dot colour encodes net flow on a "
-            "diverging Red–Blue scale (red = exporter, blue = importer, white = balanced). "
-            "Dot size encodes total departures (clipped at the 95th percentile to prevent a few "
-            "mega-hubs from dominating the visual). Residential areas tend to cluster red in the "
-            "morning; commercial cores cluster blue. Hover over any dot for station details.",
-        "3c \u2014 AM vs PM Rush":
+        "3a \u2014 Busiest Stations":
+            "Top 20 stations ranked by total departures over the full 12-month period. "
+            "The bar length shows annual trip volume; the annotation shows e-bike share. "
+            "The right panel shows the full departure distribution on a log scale — confirming "
+            "that demand follows a long-tail structure where a small number of hubs generate "
+            "the majority of trips.",
+        "3b \u2014 Chronic Station Imbalance":
+            "Stations ranked by imbalance ratio = |net_flow| / total_flow. This metric "
+            "separates genuinely imbalanced stations from high-volume hubs that are simply busy. "
+            "A busy station with balanced arrivals and departures scores near zero; a quieter "
+            "station where 60% of trips flow in one direction ranks at the top. "
+            "Minimum volume filter: 1,000 total trips.",
+        "3c \u2014 Imbalance Map":
+            "Geographic scatter of all stations (total_flow ≥ 1,000). Dot colour encodes "
+            "signed imbalance ratio = net_flow / total_flow on a −1 to +1 scale "
+            "(red = structural exporter, blue = structural importer, white = balanced). "
+            "High-volume hubs appear pale if near-balanced. Dot size encodes total flow.",
+        "3d \u2014 AM vs PM Rush":
             "Side-by-side maps comparing per-station net flow during the AM rush (7–9 AM) vs. "
             "the PM rush (5–7 PM). If the commuter-reversal hypothesis holds, the colour pattern "
             "should flip: stations that export bikes in the morning (people commuting out) should "
             "import bikes in the evening (people commuting back). The caption below shows what "
             "fraction of stations actually exhibit this reversal.",
-        "3d \u2014 Inequality (Lorenz / Gini)":
+        "3e \u2014 Inequality (Lorenz / Gini)":
             "The Lorenz curve plots the cumulative share of total departures (y-axis) against "
             "the cumulative share of stations ranked from least to most active (x-axis). The "
             "45° dashed line represents perfect equality (every station handles the same volume). "
             "The greater the bow, the higher the Gini coefficient and the more concentrated "
-            "traffic is in a small number of hub stations. A high Gini has direct implications "
-            "for fleet allocation: resources should be proportional to traffic, not spread evenly.",
+            "traffic is in a small number of hub stations.",
     }
     sub = st.selectbox("Select chart", list(CHART_DESCS.keys()))
     st.caption(CHART_DESCS[sub])
 
-    # ── 3a: Top Imbalanced ──
+    # ── 3a: Busiest Stations ──
     if sub.startswith("3a"):
-        TOP_N = 15
-        top_exp = stations.nsmallest(TOP_N, "net_flow")
-        top_imp = stations.nlargest(TOP_N,  "net_flow")
+        TOP_N = 20
+        top_busy = stations.nlargest(TOP_N, "total_departures").copy()
+        top_busy["pct_electric"] = (top_busy["electric_dep"] / top_busy["total_departures"] * 100).round(1)
 
         fig = make_subplots(rows=1, cols=2,
-                            subplot_titles=[f"Top {TOP_N} Net Exporters (bikes drain)",
-                                            f"Top {TOP_N} Net Importers (bikes accumulate)"])
+                            subplot_titles=[f"Top {TOP_N} Busiest Stations",
+                                            "Departure Distribution (log scale)"],
+                            column_widths=[0.6, 0.4])
 
-        fig.add_trace(go.Bar(y=top_exp["station_name"].str[:35],
-                             x=top_exp["net_flow"], orientation="h",
-                             marker_color=C_RED, name="Exporters",
-                             hovertemplate="%{y}<br>Net flow: %{x:,.0f}"), row=1, col=1)
-        fig.add_trace(go.Bar(y=top_imp["station_name"].str[:35],
-                             x=top_imp["net_flow"], orientation="h",
-                             marker_color=C_MEMBER, name="Importers",
-                             hovertemplate="%{y}<br>Net flow: %{x:,.0f}"), row=1, col=2)
+        fig.add_trace(go.Bar(
+            y=top_busy["station_name"].str[:35],
+            x=top_busy["total_departures"],
+            orientation="h",
+            marker_color=C_MEMBER,
+            hovertemplate="%{y}<br>Departures: %{x:,.0f}",
+            name="Departures",
+        ), row=1, col=1)
 
-        fig.update_layout(**PLOTLY_LAYOUT, height=520,
-                          title="Chronic Station Demand Imbalance (12-Month Total)")
+        dep_all = stations["total_departures"].clip(lower=1)
+        fig.add_trace(go.Histogram(
+            x=dep_all, nbinsx=50,
+            marker_color=C_MEMBER, opacity=0.7,
+            name="All stations",
+        ), row=1, col=2)
+        fig.add_vline(x=dep_all.median(), line_dash="dash", line_color="black",
+                      annotation_text=f"Median {dep_all.median():,.0f}", row=1, col=2)
+
+        fig.update_layout(**PLOTLY_LAYOUT, height=560,
+                          title="Station Activity — Busiest Stations & Departure Distribution",
+                          showlegend=False)
         fig.update_yaxes(autorange="reversed", row=1, col=1)
-        fig.update_yaxes(autorange="reversed", row=1, col=2)
-        fig.update_xaxes(title_text="Net Flow (arrivals − departures)", row=1, col=1)
-        fig.update_xaxes(title_text="Net Flow (arrivals − departures)", row=1, col=2)
+        fig.update_xaxes(title_text="Total Departures", row=1, col=1)
+        fig.update_xaxes(title_text="Total Departures", row=1, col=2)
+        fig.update_yaxes(title_text="Number of Stations (log)", type="log", row=1, col=2)
         st.plotly_chart(fig, use_container_width=True)
 
-        balanced = stations["net_flow"].between(-10, 10).sum()
+        total_dep  = stations["total_departures"].sum()
+        top20_share = top_busy["total_departures"].sum() / total_dep * 100
         st.caption(
-            f"Chronic exporters (net flow < −50): {(stations['net_flow']<-50).sum()} stations  |  "
-            f"Chronic importers (net flow > +50): {(stations['net_flow']>50).sum()} stations  |  "
-            f"Near-balanced (net flow ±10): {balanced} stations ({balanced/len(stations)*100:.0f}%). "
-            "Rebalancing resources should concentrate on the chronic imbalance tail — the near-balanced "
-            "majority largely self-correct through normal demand."
+            f"Top 20 stations account for {top20_share:.1f}% of all departures. "
+            f"Busiest station: {top_busy.iloc[0]['station_name']} "
+            f"({top_busy.iloc[0]['total_departures']:,.0f} departures). "
+            f"Median station: {dep_all.median():,.0f} departures."
         )
 
-    # ── 3b: Imbalance Map ──
+    # ── 3b: Chronic Station Imbalance (imbalance_ratio) ──
     elif sub.startswith("3b"):
-        df_map = (stations.dropna(subset=["lat","lng"])
-                  .pipe(lambda d: d[d["lat"].between(40.4, 41.0) & d["lng"].between(-74.3, -73.7)]))
-        abs_max = df_map["net_flow"].abs().quantile(0.97)
+        TOP_N = 15
+        MIN_FLOW = 1000
+        df_ib = stations.copy()
+        df_ib["total_flow"]      = df_ib["total_departures"] + df_ib["total_arrivals"]
+        df_ib["imbalance_ratio"] = (df_ib["net_flow"].abs() /
+                                    df_ib["total_flow"].replace(0, np.nan)).fillna(0)
+        df_filt = df_ib[df_ib["total_flow"] >= MIN_FLOW]
+
+        top_exp = df_filt[df_filt["net_flow"] < 0].nlargest(TOP_N, "imbalance_ratio")
+        top_imp = df_filt[df_filt["net_flow"] > 0].nlargest(TOP_N, "imbalance_ratio")
+
+        fig = make_subplots(rows=1, cols=2,
+                            subplot_titles=[f"Top {TOP_N} Structural Exporters",
+                                            f"Top {TOP_N} Structural Importers"])
+
+        fig.add_trace(go.Bar(
+            y=top_exp["station_name"].str[:35],
+            x=(top_exp["imbalance_ratio"] * 100),
+            orientation="h", marker_color=C_RED, name="Exporters",
+            hovertemplate="%{y}<br>Imbalance ratio: %{x:.1f}%",
+        ), row=1, col=1)
+        fig.add_trace(go.Bar(
+            y=top_imp["station_name"].str[:35],
+            x=(top_imp["imbalance_ratio"] * 100),
+            orientation="h", marker_color=C_MEMBER, name="Importers",
+            hovertemplate="%{y}<br>Imbalance ratio: %{x:.1f}%",
+        ), row=1, col=2)
+
+        fig.update_layout(**PLOTLY_LAYOUT, height=520,
+                          title="Chronic Station Imbalance — Ranked by Imbalance Ratio")
+        fig.update_yaxes(autorange="reversed", row=1, col=1)
+        fig.update_yaxes(autorange="reversed", row=1, col=2)
+        fig.update_xaxes(title_text="|net_flow| / total_flow (%)", row=1, col=1)
+        fig.update_xaxes(title_text="|net_flow| / total_flow (%)", row=1, col=2)
+        st.plotly_chart(fig, use_container_width=True)
+
+        n_high = (df_filt["imbalance_ratio"] > 0.3).sum()
+        st.caption(
+            f"Stations analysed (total_flow ≥ {MIN_FLOW:,}): {len(df_filt):,}  |  "
+            f"Median imbalance ratio: {df_filt['imbalance_ratio'].median():.1%}  |  "
+            f"Stations with ratio > 30%: {n_high}. "
+            "High-volume hubs that are near-balanced score low and do not appear here — "
+            "only chronically one-directional stations rank at the top."
+        )
+
+    # ── 3c: Imbalance Map (signed_ratio) ──
+    elif sub.startswith("3c"):
+        MIN_FLOW = 1000
+        df_map = stations.dropna(subset=["lat", "lng"]).copy()
+        df_map = df_map[df_map["lat"].between(40.4, 41.0) & df_map["lng"].between(-74.3, -73.7)]
+        df_map["total_flow"]   = df_map["total_departures"] + df_map["total_arrivals"]
+        df_map["signed_ratio"] = (df_map["net_flow"] /
+                                  df_map["total_flow"].replace(0, np.nan)).fillna(0)
+        df_map = df_map[df_map["total_flow"] >= MIN_FLOW].copy()
+        size_col = (df_map["total_flow"]
+                    .clip(upper=df_map["total_flow"].quantile(0.95))
+                    .pipe(lambda x: (x / x.max() * 25 + 3)))
 
         fig = px.scatter_mapbox(
             df_map,
             lat="lat", lon="lng",
-            color="net_flow",
-            size=df_map["total_departures"]
-                .clip(upper=df_map["total_departures"].quantile(0.95))
-                .pipe(lambda x: (x / x.max() * 25 + 3)),
+            color="signed_ratio",
+            size=size_col,
             color_continuous_scale="RdBu",
-            range_color=[-abs_max, abs_max],
+            range_color=[-1, 1],
             mapbox_style="open-street-map",
             zoom=11,
             hover_name="station_name",
-            hover_data={"net_flow": True, "total_departures": True,
+            hover_data={"signed_ratio": ":.2f", "total_flow": True,
                         "lat": False, "lng": False},
-            labels={"net_flow": "Net Flow"},
+            labels={"signed_ratio": "Signed Ratio"},
         )
         fig.update_layout(**PLOTLY_LAYOUT, height=600,
-                          title="Citi Bike Station Demand Imbalance Map<br>"
-                                "<sup>Red = exporter (bikes drain) | Blue = importer (bikes accumulate)</sup>",
-                          coloraxis_colorbar=dict(title="Net Flow"))
+                          title="Citi Bike Station Structural Imbalance Map<br>"
+                                "<sup>Red = structural exporter | Blue = structural importer | "
+                                "Pale = near-balanced</sup>",
+                          coloraxis_colorbar=dict(title="net_flow / total_flow"))
         st.plotly_chart(fig, use_container_width=True)
 
-    # ── 3c: AM vs PM Rush ──
-    elif sub.startswith("3c"):
+    # ── 3d: AM vs PM Rush ──
+    elif sub.startswith("3d"):
         def flow_snapshot(df_sub):
             dep = df_sub.groupby("start_station_id").size().rename("dep")
             arr = df_sub.groupby("end_station_id").size().rename("arr")
@@ -1003,8 +1090,8 @@ elif page == "3 \u2014 Spatial Analysis":
             "priority targets for rebalancing truck routes."
         )
 
-    # ── 3d: Lorenz / Gini ──
-    elif sub.startswith("3d"):
+    # ── 3e: Lorenz / Gini ──
+    elif sub.startswith("3e"):
         pop, inc = lorenz(stations["total_departures"].values)
         g = gini(stations["total_departures"].values)
 
@@ -1041,30 +1128,21 @@ elif page == "3 \u2014 Spatial Analysis":
 # ══════════════════════════════════════════════════════════
 # PAGE: SECTION 4 — ADVANCED
 # ══════════════════════════════════════════════════════════
-elif page == "4 \u2014 Advanced / Cross-dim":
-    st.title("Section 4: Cross-dimensional & Advanced")
+elif page == "4 \u2014 Advanced Analysis":
+    st.title("Section 4: Advanced Analysis")
 
     CHART_DESCS = {
         "4a \u2014 Hour × Day-of-Week Heatmap":
             "A 7×24 demand surface showing trip volume for every combination of day of the week "
             "and hour of the day, computed from the 100k trip sample. Darker cells = higher "
             "demand. Two bright horizontal bands on weekdays (≈8 AM and ≈5–6 PM) reveal the "
-            "commuter rush; a broader midday-weekend band captures leisure usage. This heatmap "
-            "is the empirical basis for shift-scheduling and time-varying rebalancing policies.",
-        "4b \u2014 Weather Sensitivity by User":
+            "commuter rush; a broader midday-weekend band captures leisure usage.",
+        "4b \u2014 Weather Sensitivity by Rider Segment":
             "Tests whether members and casual riders respond differently to weather shocks. "
             "Left panel: temperature vs. daily rides for each user type with separate OLS "
-            "regression lines — a steeper slope and higher r indicates greater sensitivity. "
-            "Right panel: average rides on dry vs. rainy days for each user type, with the "
-            "percentage demand drop labelled. Casual riders are expected to be substantially "
-            "more weather-sensitive because their trips are discretionary.",
-        "4c \u2014 Rebalancing Priority Score":
-            "A composite priority score (0–100) that ranks stations by operational urgency. "
-            "Score = 0.5 × (log-scaled departures, normalised) + 0.5 × (|net flow|, normalised). "
-            "High-departure stations matter because failures there affect many riders; high "
-            "|net flow| stations require active rebalancing to avoid running empty or full. "
-            "Stations above the 90th percentile are flagged red on the map and listed in the "
-            "table below as the highest-priority targets for truck routing.",
+            "regression lines. Right panel: average rides on dry vs. rainy days per user type. "
+            "Casual riders are expected to be substantially more weather-sensitive because "
+            "their trips are discretionary.",
     }
     sub = st.selectbox("Select chart", list(CHART_DESCS.keys()))
     st.caption(CHART_DESCS[sub])
@@ -1093,7 +1171,6 @@ elif page == "4 \u2014 Advanced / Cross-dim":
                             subplot_titles=["Temperature Sensitivity",
                                             "Rain Impact by User Type"])
 
-        # (a) Temp sensitivity — member vs casual
         for utype, y_col, color in [("member", "member_rides", C_MEMBER),
                                      ("casual", "casual_rides", C_CASUAL)]:
             fig.add_trace(go.Scatter(x=wx["TAVG"], y=wx[y_col], mode="markers",
@@ -1105,14 +1182,13 @@ elif page == "4 \u2014 Advanced / Cross-dim":
                                      name=f"{utype} fit (r={r:.2f})",
                                      showlegend=True), row=1, col=1)
 
-        # (b) Rain penalty bar
         if "is_rainy" in daily.columns:
             wx2 = daily.dropna(subset=["is_rainy"])
             bars = []
             for utype, y_col, color in [("member", "member_rides", C_MEMBER),
                                          ("casual", "casual_rides", C_CASUAL)]:
-                dry  = wx2[wx2["is_rainy"]==0][y_col].mean()
-                rainy= wx2[wx2["is_rainy"]==1][y_col].mean()
+                dry   = wx2[wx2["is_rainy"]==0][y_col].mean()
+                rainy = wx2[wx2["is_rainy"]==1][y_col].mean()
                 bars.append(dict(utype=utype, dry=dry, rainy=rainy,
                                  pct=-(dry-rainy)/dry*100, color=color))
             fig.add_trace(go.Bar(x=[b["utype"].capitalize() for b in bars],
@@ -1136,54 +1212,6 @@ elif page == "4 \u2014 Advanced / Cross-dim":
         fig.update_yaxes(title_text="Daily Rides", row=1, col=1)
         st.plotly_chart(fig, use_container_width=True)
 
-    # ── 4c: Rebalancing Priority ──
-    elif sub.startswith("4c"):
-        df_r = (stations.dropna(subset=["lat","lng"])
-                .pipe(lambda d: d[d["lat"].between(40.4, 41.0) & d["lng"].between(-74.3, -73.7)])
-                .copy())
-        df_r["log_dep"]  = np.log1p(df_r["total_departures"])
-        df_r["abs_flow"] = df_r["net_flow"].abs()
-        df_r["score"]    = (0.5 * (df_r["log_dep"]  / df_r["log_dep"].max()) +
-                            0.5 * (df_r["abs_flow"] / df_r["abs_flow"].max()))
-        df_r["score"]    = (df_r["score"] * 100).round(1)
-        p90              = df_r["score"].quantile(0.9)
-        df_r["priority"] = df_r["score"].apply(
-            lambda x: "High (top 10%)" if x >= p90 else "Normal")
-
-        col1, col2 = st.columns([2, 1])
-        with col1:
-            fig_map = px.scatter_mapbox(
-                df_r.sort_values("priority", ascending=False),
-                lat="lat", lon="lng",
-                color="priority",
-                size="score",
-                color_discrete_map={"High (top 10%)": C_RED, "Normal": C_MEMBER},
-                mapbox_style="open-street-map", zoom=11,
-                hover_name="station_name",
-                hover_data={"score": True, "net_flow": True,
-                            "total_departures": True, "lat": False, "lng": False},
-                title="Rebalancing Priority Map")
-            fig_map.update_layout(**PLOTLY_LAYOUT, height=520)
-            st.plotly_chart(fig_map, use_container_width=True)
-
-        with col2:
-            fig_hist = go.Figure(go.Histogram(
-                x=df_r["score"], nbinsx=40,
-                marker_color=C_MEMBER, opacity=0.85))
-            fig_hist.add_vline(x=p90, line_dash="dash", line_color=C_RED,
-                               annotation_text=f"90th pct ({p90:.1f})")
-            fig_hist.update_layout(**PLOTLY_LAYOUT, height=520,
-                                   title="Priority Score Distribution",
-                                   xaxis_title="Priority Score",
-                                   yaxis_title="Stations")
-            st.plotly_chart(fig_hist, use_container_width=True)
-
-        high = df_r[df_r["priority"] == "High (top 10%)"].nlargest(10, "score")
-        st.subheader("Top 10 Highest Priority Stations")
-        st.dataframe(high[["station_name","score","net_flow","total_departures"]]
-                     .rename(columns={"station_name":"Station","score":"Priority Score",
-                                      "net_flow":"Net Flow","total_departures":"Departures"}),
-                     use_container_width=True)
 
 # ══════════════════════════════════════════════════════════
 # PAGE: INTERACTIVE MAP
@@ -1200,7 +1228,7 @@ elif page == "Interactive Map":
     if html_file.exists():
         st.components.v1.html(html_file.read_text(encoding="utf-8"), height=700, scrolling=True)
     else:
-        st.warning("Map file not found: maps/station_imbalance.html — re-run Section 4d in the EDA notebook to generate it.")
+        st.warning("Map file not found: maps/station_imbalance.html — re-run Section 3c in the EDA notebook to generate it.")
 
 # ══════════════════════════════════════════════════════════
 # PAGE: CONCLUSIONS
@@ -1209,7 +1237,7 @@ elif page == "5 \u2014 Conclusions":
     st.title("Conclusions & Operational Recommendations")
     st.markdown(
         "Key findings derived from the full-year Citi Bike dataset (Mar 2025 – Feb 2026), "
-        "covering ~365 days of system-wide daily aggregates, 2,352 stations, and a 100k trip sample. "
+        "covering ~365 days of system-wide daily aggregates, 2,250 stations, and a 100k trip sample. "
         "All statistics below are computed live from the loaded data."
     )
     st.markdown("---")
@@ -1221,11 +1249,14 @@ elif page == "5 \u2014 Conclusions":
     winter_avg = daily[daily["season"]=="Winter"]["total_rides"].mean()
     fall_drop  = (fall_avg - winter_avg) / fall_avg * 100
 
-    balanced    = stations["net_flow"].between(-10,10).sum()
-    chronic_exp = (stations["net_flow"] < -50).sum()
-    chronic_imp = (stations["net_flow"] > 50).sum()
-    top_exp_stn = stations.nsmallest(1,"net_flow").iloc[0]
-    top_imp_stn = stations.nlargest(1,"net_flow").iloc[0]
+    df_ib = stations.copy()
+    df_ib["total_flow"]      = df_ib["total_departures"] + df_ib["total_arrivals"]
+    df_ib["imbalance_ratio"] = (df_ib["net_flow"].abs() /
+                                df_ib["total_flow"].replace(0, np.nan)).fillna(0)
+    df_ib_filt  = df_ib[df_ib["total_flow"] >= 1000]
+    n_high_imb  = (df_ib_filt["imbalance_ratio"] > 0.3).sum()
+    top_exp_stn = df_ib_filt[df_ib_filt["net_flow"] < 0].nlargest(1,"imbalance_ratio").iloc[0]
+    top_imp_stn = df_ib_filt[df_ib_filt["net_flow"] > 0].nlargest(1,"imbalance_ratio").iloc[0]
     g = gini(stations["total_departures"].values)
 
     r1c1,r1c2,r1c3,r1c4 = st.columns(4)
@@ -1239,7 +1270,7 @@ elif page == "5 \u2014 Conclusions":
     r2c1,r2c2,r2c3,r2c4 = st.columns(4)
     r2c1.metric("Fall → Winter Drop",    f"{fall_drop:.0f}%",     delta_color="inverse")
     r2c2.metric("Temp–Rides Correlation",f"{r_temp:.3f}")
-    r2c3.metric("Chronic Exporter Stns", f"{chronic_exp}")
+    r2c3.metric("High Imbalance Stns (>30%)", f"{n_high_imb}")
     r2c4.metric("Station Traffic Gini",  f"{g:.2f}")
 
     st.markdown("---")
@@ -1282,25 +1313,26 @@ elif page == "5 \u2014 Conclusions":
          f"disproportionate share of total traffic. This means fleet allocation must be "
          f"demand-proportional: spreading bikes and rebalancing resources evenly across all "
          f"stations would dramatically over-serve low-traffic stations while under-serving hubs."),
+        ("Busiest ≠ most imbalanced",
+         f"The highest-volume stations tend to be self-balancing — their large gross flows "
+         f"offset each other through AM/PM commuter reversal. The chronically imbalanced "
+         f"stations (imbalance ratio > 30%) are a distinct set of {n_high_imb} mid-volume "
+         f"sites at residential edges or near one-directional attractors such as parks and "
+         f"ferry terminals. Ranking by imbalance ratio rather than absolute net flow correctly "
+         f"separates these two groups."),
         ("Predictable commuter flow reversal",
-         f"There are {chronic_exp} chronic net exporters (net flow < −50) and {chronic_imp} "
-         f"chronic net importers (net flow > +50) over the 12-month period. Many stations "
-         f"self-correct between AM and PM rush — they export bikes in the morning as commuters "
-         f"depart and import them in the evening as commuters return. Rebalancing operations "
-         f"should focus on the stations that do NOT reverse, as those are the ones that "
-         f"accumulate or deplete inventory irreversibly throughout the day."),
+         "Many stations self-correct between AM and PM rush — they export bikes in the morning "
+         "as commuters depart and import them in the evening as commuters return. Rebalancing "
+         "operations should focus on the stations that do NOT reverse, as those accumulate or "
+         "deplete inventory irreversibly throughout the day."),
         ("Geographic clustering",
-         f"Exporters cluster in residential neighbourhoods (Brooklyn, outer boroughs) where "
-         f"people begin their commutes; importers cluster in commercial cores (Midtown, "
-         f"Lower Manhattan) where commuters arrive. This geographic pattern is stable and "
-         f"predictable, making it suitable for pre-positioning trucks before rush hours. "
-         f"Worst exporter: {top_exp_stn['station_name']} (net flow: {top_exp_stn['net_flow']:+,.0f}). "
-         f"Worst importer: {top_imp_stn['station_name']} (net flow: {top_imp_stn['net_flow']:+,.0f})."),
-        ("Most stations are near-balanced",
-         f"{balanced} of {len(stations)} stations ({balanced/len(stations)*100:.0f}%) have a "
-         f"net flow within ±10 over the full year, meaning they are essentially self-balancing. "
-         f"This concentration of imbalance in a small tail means rebalancing resources can be "
-         f"highly targeted rather than spread across the entire network."),
+         f"Structural exporters cluster in residential zones (Brooklyn, outer boroughs) where "
+         f"people begin their commutes; importers concentrate in commercial cores (Midtown, "
+         f"Lower Manhattan) where commuters arrive. This pattern supports route planning. "
+         f"Most structurally imbalanced exporter: {top_exp_stn['station_name']} "
+         f"(ratio={top_exp_stn['imbalance_ratio']:.1%}). "
+         f"Most structurally imbalanced importer: {top_imp_stn['station_name']} "
+         f"(ratio={top_imp_stn['imbalance_ratio']:.1%})."),
     ]:
         st.markdown(f'<div class="finding-box"><strong>{title}.</strong> {body}</div>',
                     unsafe_allow_html=True)
@@ -1321,11 +1353,11 @@ elif page == "5 \u2014 Conclusions":
          "service gap during the early spring surge, exactly when casual riders are returning "
          "to the system."),
         ("Priority-based rebalancing",
-         "Use the composite priority score from Section 4c to rank stations for rebalancing "
-         "truck routing rather than covering all stations uniformly. Stations above the 90th "
-         "percentile score should receive daily attention; lower-priority stations may only "
-         "need weekly or demand-triggered visits. This can reduce total truck mileage by "
-         "concentrating effort where impact is highest."),
+         "Use imbalance ratio to rank stations for rebalancing truck routing rather than "
+         "covering all stations uniformly. The small tail of high-ratio stations generates "
+         "the majority of the rebalancing workload — concentrating daily attention there "
+         "and reducing less-imbalanced stations to weekly or demand-triggered visits can "
+         "substantially reduce total truck mileage."),
         ("Weather-adaptive scheduling",
          "On days with forecast rain or snow, reduce rebalancing frequency (fewer bike moves "
          "are needed because overall demand drops 15–30%) and redirect crew to maintenance "
