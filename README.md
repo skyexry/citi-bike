@@ -92,7 +92,7 @@ Get a free NOAA token at [ncdc.noaa.gov/cdo-web/token](https://www.ncdc.noaa.gov
 | **1 – Overview & Quality** | Missing values, summary stats, rider/bike type composition, duration distributions |
 | **2 – Temporal Demand** | Daily time series, hourly profiles, day-of-week, seasonal decomposition, weather × demand, rush-hour, e-bike adoption |
 | **3 – Spatial Demand** | Top stations, imbalance ranking, geographic map, AM/PM rush reversal, Lorenz curve & Gini |
-| **4 – Advanced** | Hour×day heatmap, weather sensitivity by rider segment, Holt-Winters forecast, K-Means station clustering |
+| **4 – Advanced** | Hour×day heatmap, weather sensitivity by rider segment |
 | **5 – Conclusions** | 12 key findings, operational recommendations (fleet sizing, rebalancing, weather-adaptive scheduling) |
 
 ---
@@ -106,7 +106,7 @@ Get a free NOAA token at [ncdc.noaa.gov/cdo-web/token](https://www.ncdc.noaa.gov
 | **1 – Distributions** | Rider/bike type, duration distributions |
 | **2 – Temporal** | 8 time-series and pattern charts |
 | **3 – Spatial** | Station rankings, imbalance, map, Lorenz curve |
-| **4 – Advanced** | Heatmap, weather sensitivity, forecast, clustering |
+| **4 – Advanced** | Heatmap, weather sensitivity |
 | **Interactive Map** | Folium station imbalance map |
 | **5 – Conclusions** | Live-computed stats and recommendations |
 | **💬 Ask the Data** | LLM-powered Q&A agent (requires OpenAI key) |
