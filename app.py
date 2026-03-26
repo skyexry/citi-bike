@@ -6,11 +6,13 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from pathlib import Path
 from openai import OpenAI
+import folium
+import matplotlib.cm as mcm
+import matplotlib.colors as mcolors
 
 # ── Paths ──
 BASE = Path(__file__).parent
 DATA = BASE / "data" / "app"
-MAPS = BASE / "maps"
 
 # ── Colour palette (matches notebook) ──
 C_MEMBER = "#2196F3"
@@ -72,6 +74,11 @@ hr { border-color: #E2E8F0; margin: 1.5rem 0; }
     padding: .85rem 1.1rem; margin: .6rem 0;
     border-radius: 0 8px 8px 0; font-size: .9rem; line-height: 1.6;
 }
+.narrative-box {
+    background: #F8FAFC; border: 1px solid #E2E8F0;
+    padding: 1.1rem 1.4rem; margin: .5rem 0 .8rem 0;
+    border-radius: 10px; font-size: .92rem; line-height: 1.75; color: #1E293B;
+}
 
 [data-testid="stExpander"] { border: 1px solid #E2E8F0 !important; border-radius: 10px !important; }
 [data-testid="stDataFrame"] { border: 1px solid #E2E8F0; border-radius: 10px; overflow: hidden; }
@@ -117,11 +124,9 @@ page = st.sidebar.radio("", [
     "Overview",
     "Raw Data Explorer",
     "1 \u2014 Distributions",
-    "2 \u2014 Temporal Patterns",
+    "2 \u2014 Temporal",
     "3 \u2014 Spatial Analysis",
-    "4 \u2014 Advanced Analysis",
-    "Interactive Map",
-    "5 \u2014 Conclusions",
+    "4 \u2014 Conclusions",
     "\U0001f4ac Ask the Data",
 ])
 
@@ -158,25 +163,48 @@ You help users interpret ridership data covering March 2025 – February 2026.
 
 ## Dataset overview
 - ~28 million total trips across 2,250 active stations
-- Rider types: member (~80%), casual (~20%)
-- Bike types: electric (~70%), classic (~30%)
-- Weather: NOAA Central Park daily observations (temp, precipitation, snow, wind)
+- Rider types: member (~84% of trips), casual (~16%)
+- Bike types: electric (~70%), classic (~30%); electric adoption has plateaued (no sustained growth)
+- Weather: NOAA Central Park daily observations (TAVG, TMAX, TMIN, PRCP, SNOW, AWND)
+
+## Dashboard structure (4 analytical sections)
+- Section 1 — Distributions: rider/bike type composition, trip duration profiles
+- Section 2 — Temporal (10 subsections 2a–2j): seasonal decomposition, daily trend & anomaly
+  detection (14-day rolling, ±2σ), day-of-week, hourly profiles, hour×day heatmap,
+  rush-hour analysis, weather×demand, weather sensitivity by segment, electric adoption,
+  trip duration distribution
+- Section 3 — Spatial: busiest stations, chronic imbalance (imbalance_ratio = |net_flow|/total_flow),
+  geographic imbalance map (signed_ratio = net_flow/total_flow), AM/PM rush flow reversal,
+  Lorenz curve & Gini coefficient
+- Section 4 — Conclusions & Operational Recommendations
+
+## Key findings from the EDA
+1. Temperature is the dominant demand driver (r ≈ 0.86); system swings ~3× between winter trough and summer peak.
+2. Two distinct populations: members = habitual commuters (bimodal 8 AM / 5–6 PM, short trips, weather-resilient);
+   casuals = discretionary leisure riders (midday/weekend, longer trips, weather-sensitive).
+3. Rain suppresses demand ~15–30%; snow even more. Weather elasticity is quantifiable and actionable.
+4. Electric bikes dominate (~70%) but adoption has plateaued — creates a battery logistics sub-problem.
+5. Busiest stations ≠ most imbalanced: high-volume hubs self-balance via AM/PM reversal; chronic
+   imbalance is concentrated in mid-volume residential-edge and terminal stations.
+6. Station utilisation is highly unequal (Gini ≈ 0.59): top 20% of stations handle 61% of departures.
+7. Exporters cluster in residential zones (Brooklyn, outer boroughs); importers in commercial cores (Midtown, Lower Manhattan).
+8. Correct imbalance metric is imbalance_ratio = |net_flow| / total_flow, NOT raw net_flow.
 
 ## Available data (injected in each user message)
-- daily_stats: 365 rows, one per day — total_rides, member_rides, casual_rides,
-  electric_rides, avg_duration, pct_member, pct_electric, TAVG, PRCP, SNOW, season,
-  day_name, is_weekend
-- station_stats: 2,250 rows — station_name, total_departures, total_arrivals,
-  net_flow, lat, lng, pct_member
-- trips_sample: 100,000 individual trips — rideable_type, user_type, duration_min,
-  hour, day_of_week, season, rush_hour, start/end station
+- daily_stats: 365 rows — total_rides, member_rides, casual_rides, pct_member, pct_electric,
+  avg_duration, pct_rush_hour, TAVG, PRCP, SNOW, season, day_name, is_weekend
+- station_stats: 2,250 rows — station_name, total_departures, total_arrivals, net_flow,
+  imbalance_ratio, signed_ratio, lat, lng, pct_member
+- trips_sample: 100,000 trips — rideable_type, user_type, duration_min, hour, day_of_week,
+  season, rush_hour, start/end station
 
 ## Instructions
 - Answer ONLY based on the data provided in the user message.
 - Always cite specific numbers from the data.
 - Be concise: 3–5 sentences or a short bullet list. No lengthy preamble.
-- If the data is insufficient to answer precisely, say so and suggest what to look at.
+- If the data is insufficient to answer precisely, say so and suggest what additional data would help.
 - Do not invent statistics not present in the context.
+- When discussing imbalance, use imbalance_ratio (normalised), not raw net_flow.
 """.strip()
 
 
@@ -225,11 +253,39 @@ def _build_user_prompt(question: str) -> str:
         .to_string(index=False)
     )
 
-    # Most imbalanced stations
+    # Most imbalanced stations by imbalance_ratio (correct metric: normalised by total_flow)
+    _s = stations.copy()
+    _s["total_flow"]      = _s["total_departures"] + _s["total_arrivals"]
+    _s["imbalance_ratio"] = (_s["net_flow"].abs() /
+                             _s["total_flow"].replace(0, np.nan)).fillna(0)
+    _s["signed_ratio"]    = (_s["net_flow"] /
+                             _s["total_flow"].replace(0, np.nan)).fillna(0)
     most_imbalanced = (
-        stations.reindex(stations["net_flow"].abs().nlargest(10).index)
-        [["station_name", "net_flow", "total_departures"]]
+        _s[_s["total_flow"] >= 1000]
+        .nlargest(10, "imbalance_ratio")
+        [["station_name", "imbalance_ratio", "signed_ratio", "net_flow", "total_flow"]]
+        .round(4)
         .to_string(index=False)
+    )
+
+    # Top exporters and importers by signed_ratio
+    top_exporters = (
+        _s[(_s["total_flow"] >= 1000) & (_s["signed_ratio"] < 0)]
+        .nsmallest(5, "signed_ratio")
+        [["station_name", "signed_ratio", "net_flow", "total_flow"]]
+        .round(4).to_string(index=False)
+    )
+    top_importers = (
+        _s[(_s["total_flow"] >= 1000) & (_s["signed_ratio"] > 0)]
+        .nlargest(5, "signed_ratio")
+        [["station_name", "signed_ratio", "net_flow", "total_flow"]]
+        .round(4).to_string(index=False)
+    )
+
+    # Electric adoption over time
+    electric_by_season = (
+        daily.groupby("season")["pct_electric"].agg(["mean", "min", "max"])
+        .round(1).to_string()
     )
 
     # Trip duration by user type
@@ -259,8 +315,18 @@ Snow  days avg rides : {snow_rides:,.0f}
 --- TOP 10 STATIONS BY DEPARTURES ---
 {top_dep}
 
---- TOP 10 MOST IMBALANCED STATIONS (by |net_flow|) ---
+--- TOP 10 MOST IMBALANCED STATIONS (by imbalance_ratio = |net_flow|/total_flow, min 1000 trips) ---
+NOTE: imbalance_ratio is the correct metric — busiest stations are NOT necessarily most imbalanced.
 {most_imbalanced}
+
+--- TOP 5 NET EXPORTERS (signed_ratio most negative, min 1000 trips) ---
+{top_exporters}
+
+--- TOP 5 NET IMPORTERS (signed_ratio most positive, min 1000 trips) ---
+{top_importers}
+
+--- ELECTRIC BIKE SHARE BY SEASON (%) ---
+{electric_by_season}
 
 --- TRIP DURATION BY RIDER TYPE (trips ≤ 60 min) ---
 {dur_summary}
@@ -281,7 +347,7 @@ This dashboard presents a full-year analysis of NYC Citi Bike ridership across f
 | **1 — Distributions** | Rider composition, bike type splits, trip duration profiles |
 | **2 — Temporal** | Seasonal arc, commuter vs. leisure profiles, weather elasticity, electric adoption |
 | **3 — Spatial** | Busiest stations, chronic imbalance (imbalance ratio), geographic clustering, AM/PM reversal |
-| **4 — Advanced** | Hour × day demand surface, weather sensitivity by segment, Holt-Winters forecasting, K-Means station clustering |
+| **4 — Conclusions** | 3-theme synthesis, 8 key findings (temporal + spatial), 3 operational recommendations |
 """)
     st.markdown("---")
 
@@ -486,51 +552,63 @@ elif page == "1 \u2014 Distributions":
 # ══════════════════════════════════════════════════════════
 # PAGE: SECTION 2 — TEMPORAL
 # ══════════════════════════════════════════════════════════
-elif page == "2 \u2014 Temporal Patterns":
-    st.title("Section 2: Temporal Patterns")
+elif page == "2 \u2014 Temporal":
+    st.title("Section 2: Temporal Demand Analysis")
 
     CHART_DESCS = {
-        "2a \u2014 Daily Trend":
-            "Raw daily ride counts overlaid with a 7-day centered rolling mean and a ±1σ "
-            "confidence band. Peak and trough days are automatically annotated. The rolling "
-            "mean removes weekly seasonality to expose the underlying demand trend, while the "
-            "±1σ band flags statistically unusual days that may warrant event-driven analysis.",
-        "2b \u2014 Hourly Patterns":
-            "Percentage of each day-type's trips occurring in each hour (0–23), split by "
-            "member vs. casual riders. Weekday and weekend panels are shown side by side. "
-            "Members exhibit a classic bimodal commuter profile (peaks at 8 AM and 5–6 PM), "
-            "while casual riders concentrate in midday hours, especially on weekends.",
-        "2c \u2014 Day of Week":
+        "2a \u2014 Seasonal Decomposition":
+            "Three-panel seasonal breakdown covering all four seasons (Spring, Summer, Fall, "
+            "Winter). Box plots show the full distribution of daily rides and average trip "
+            "duration per season; grouped bars show how the member/casual split shifts across "
+            "seasons. A summary statistics table is displayed below the chart.",
+        "2b \u2014 Daily Trend & Anomaly Detection":
+            "Raw daily ride counts overlaid with a 14-day centered rolling mean and a ±2σ "
+            "confidence band. Days where the z-score exceeds ±2 are flagged as anomalies "
+            "and marked with open circles. Peak and trough days are annotated. The rolling "
+            "mean removes weekly seasonality to expose the underlying demand trend.",
+        "2c \u2014 Day-of-Week Patterns":
             "Four-panel bar chart aggregated by day of the week (Mon–Sun), showing: "
             "(1) average daily ride volume with ±1σ error bars, (2) member share (%), "
             "(3) electric bike share (%), and (4) average trip duration. Blue bars = "
             "weekdays; orange bars = weekends. Error bars indicate how much day-to-day "
             "variability exists within each weekday.",
-        "2d \u2014 Seasonal":
-            "Three-panel seasonal breakdown covering all four seasons (Spring, Summer, Fall, "
-            "Winter). Box plots show the full distribution of daily rides and average trip "
-            "duration per season; grouped bars show how the member/casual split shifts across "
-            "seasons. A summary statistics table is displayed below the chart.",
-        "2e \u2014 Weather Correlation":
+        "2d \u2014 Hourly Demand Profiles":
+            "Percentage of each day-type's trips occurring in each hour (0–23), split by "
+            "member vs. casual riders. Weekday and weekend panels are shown side by side. "
+            "Members exhibit a classic bimodal commuter profile (peaks at 8 AM and 5–6 PM), "
+            "while casual riders concentrate in midday hours, especially on weekends.",
+        "2e \u2014 Hour \u00d7 Day-of-Week Demand Surface":
+            "A 7\u00d724 demand surface showing trip volume for every combination of day of "
+            "the week and hour of the day, computed from the 100k trip sample. Darker cells "
+            "= higher demand. Two bright horizontal bands on weekdays (\u22488 AM and "
+            "\u22485\u20136 PM) reveal the commuter rush; a broader midday-weekend band "
+            "captures leisure usage.",
+        "2f \u2014 Rush-Hour Commuter Analysis":
+            "Rush hour is defined as weekday 7–9 AM and 5–7 PM. The left panel shows how "
+            "rush-hour share (% of daily trips) evolves over time on weekdays, with a 5-day "
+            "rolling average and the overall mean as a reference line. The right panel shows "
+            "rush-hour share by day of the week, highlighting the contrast between weekday "
+            "commuter demand and the near-zero rush-hour share on weekends.",
+        "2g \u2014 Weather \u00d7 Demand":
             "Three panels quantifying how weather drives demand: (1) temperature vs. total "
             "daily rides with an OLS regression line — points are coloured by rain status; "
             "(2) box plot comparing daily rides on Clear, Rainy, and Snowy days, with median "
             "and sample size annotated; "
             "(3) a correlation heatmap of all weather variables against key ride metrics. "
             "The regression slope (rides per °C) and Pearson r are shown in the legend.",
-        "2f \u2014 Rush Hour":
-            "Rush hour is defined as weekday 7–9 AM and 5–7 PM. The left panel shows how "
-            "rush-hour share (% of daily trips) evolves over time on weekdays, with a 5-day "
-            "rolling average and the overall mean as a reference line. The right panel shows "
-            "rush-hour share by day of the week, highlighting the contrast between weekday "
-            "commuter demand and the near-zero rush-hour share on weekends.",
-        "2g \u2014 Rideable Type":
+        "2h \u2014 Weather Sensitivity by Rider Segment":
+            "Tests whether members and casual riders respond differently to weather shocks. "
+            "Left panel: temperature vs. daily rides for each user type with separate OLS "
+            "regression lines. Right panel: average rides on dry vs. rainy days per user "
+            "type. Casual riders are substantially more weather-sensitive because their "
+            "trips are discretionary.",
+        "2i \u2014 Electric vs Classic Adoption":
             "Left panel: electric bike share (%) over time with a 7-day rolling average, "
             "showing whether adoption is growing, plateauing, or declining. Right panel: "
             "100% stacked bars comparing electric vs. classic bike preference for members "
             "vs. casual riders, revealing whether the two user types differ in their "
             "vehicle choice.",
-        "2h \u2014 Trip Duration":
+        "2j \u2014 Trip Duration Distribution":
             "Three panels analysing trip duration (clipped at 60 min to focus on typical "
             "usage). (1) Overlapping density histograms for members vs. casual riders — "
             "casual trips tend to be longer and more right-skewed. (2) Density by rideable "
@@ -542,30 +620,43 @@ elif page == "2 \u2014 Temporal Patterns":
     sub = st.selectbox("Select chart", list(CHART_DESCS.keys()))
     st.caption(CHART_DESCS[sub])
 
-    # ── 2a: Daily Trend ──
-    if sub.startswith("2a"):
+    # ── 2b: Daily Trend & Anomaly Detection ──
+    if sub.startswith("2b"):
         ts = daily.set_index("date")["total_rides"]
-        roll_mean = ts.rolling(7, center=True).mean()
-        roll_std  = ts.rolling(7, center=True).std()
+        roll_mean = ts.rolling(14, center=True).mean()
+        roll_std  = ts.rolling(14, center=True).std()
+
+        # z-score anomaly detection
+        z_scores = (ts - roll_mean) / roll_std
+        anomaly_mask = z_scores.abs() > 2
+        anomaly_mask.index = daily.index  # realign to integer index
+        anomalies = daily[anomaly_mask].copy()
 
         peak   = daily.loc[daily["total_rides"].idxmax()]
         trough = daily.loc[daily["total_rides"].idxmin()]
 
         fig = go.Figure()
-        # ±1σ band
+        # ±2σ band
         fig.add_trace(go.Scatter(
             x=pd.concat([roll_mean.index.to_series(), roll_mean.index.to_series()[::-1]]),
-            y=pd.concat([(roll_mean + roll_std), (roll_mean - roll_std)[::-1]]),
+            y=pd.concat([(roll_mean + 2*roll_std), (roll_mean - 2*roll_std)[::-1]]),
             fill="toself", fillcolor="rgba(229,57,53,0.12)",
-            line=dict(width=0), name="±1σ band", hoverinfo="skip"))
+            line=dict(width=0), name="±2σ band", hoverinfo="skip"))
         # Raw series
         fig.add_trace(go.Scatter(x=daily["date"], y=daily["total_rides"],
                                  line=dict(color=C_MEMBER, width=1), opacity=0.5,
                                  name="Daily rides"))
         # Rolling mean
         fig.add_trace(go.Scatter(x=roll_mean.index, y=roll_mean.values,
-                                 line=dict(color=C_RED, width=2.5), name="7-day rolling mean"))
-        # Annotations
+                                 line=dict(color=C_RED, width=2.5), name="14-day rolling mean"))
+        # Anomaly scatter
+        if len(anomalies) > 0:
+            fig.add_trace(go.Scatter(
+                x=anomalies["date"], y=anomalies["total_rides"],
+                mode="markers", marker=dict(color=C_RED, size=7, symbol="circle-open", line=dict(width=2)),
+                name=f"Anomalies (|z|>2, n={len(anomalies)})",
+                hovertemplate="%{x|%b %d}<br>%{y:,.0f} rides<extra></extra>"))
+        # Peak/trough annotations
         fig.add_annotation(x=peak["date"], y=peak["total_rides"],
                            text=f"Peak: {peak['total_rides']:,.0f}<br>({peak['date'].strftime('%b %d')})",
                            showarrow=True, arrowhead=2, arrowcolor=C_RED,
@@ -585,10 +676,10 @@ elif page == "2 \u2014 Temporal Patterns":
         c1.metric("Mean daily rides", f"{daily['total_rides'].mean():,.0f}")
         c2.metric("Std dev",          f"{daily['total_rides'].std():,.0f}")
         c3.metric("CV",               f"{daily['total_rides'].std()/daily['total_rides'].mean():.1%}")
-        c4.metric("Days observed",    f"{len(daily)}")
+        c4.metric("Anomalous days",   f"{len(anomalies)}")
 
-    # ── 2b: Hourly Patterns ──
-    elif sub.startswith("2b"):
+    # ── 2d: Hourly Demand Profiles ──
+    elif sub.startswith("2d"):
         fig = make_subplots(rows=1, cols=2, shared_yaxes=True,
                             subplot_titles=["Weekday", "Weekend"])
         hours = list(range(24))
@@ -645,8 +736,8 @@ elif page == "2 \u2014 Temporal Patterns":
             "The gap reflects the strong commuter base that drives weekday volume above weekend leisure demand."
         )
 
-    # ── 2d: Seasonal ──
-    elif sub.startswith("2d"):
+    # ── 2a: Seasonal Decomposition ──
+    elif sub.startswith("2a"):
         fig = make_subplots(rows=1, cols=3,
                             subplot_titles=["Daily Rides by Season",
                                             "User Mix by Season",
@@ -686,8 +777,8 @@ elif page == "2 \u2014 Temporal Patterns":
                .reindex(SEASON_ORDER).round(1))
         st.dataframe(tbl, use_container_width=True)
 
-    # ── 2e: Weather ──
-    elif sub.startswith("2e"):
+    # ── 2g: Weather × Demand ──
+    elif sub.startswith("2g"):
         wx = daily.dropna(subset=["TAVG", "PRCP"])
         rain_col = wx["is_rainy"].fillna(0) if "is_rainy" in wx.columns else pd.Series(0, index=wx.index)
 
@@ -793,8 +884,8 @@ elif page == "2 \u2014 Temporal Patterns":
         fig.update_yaxes(title_text="Rush Hour Trips (%)", row=1, col=2)
         st.plotly_chart(fig, use_container_width=True)
 
-    # ── 2g: Rideable Type ──
-    elif sub.startswith("2g"):
+    # ── 2i: Electric vs Classic Adoption ──
+    elif sub.startswith("2i"):
         fig = make_subplots(rows=1, cols=2,
                             subplot_titles=["Electric Share Over Time",
                                             "Rideable Preference by User Type"])
@@ -823,8 +914,8 @@ elif page == "2 \u2014 Temporal Patterns":
         fig.update_yaxes(title_text="Share (%)", row=1, col=2)
         st.plotly_chart(fig, use_container_width=True)
 
-    # ── 2h: Trip Duration ──
-    elif sub.startswith("2h"):
+    # ── 2j: Trip Duration Distribution ──
+    elif sub.startswith("2j"):
         fig = make_subplots(rows=1, cols=3,
                             subplot_titles=["Duration Density (Member vs Casual)",
                                             "Duration by Rideable Type",
@@ -868,6 +959,67 @@ elif page == "2 \u2014 Temporal Patterns":
             "The mean–median gap for casual riders is larger, indicating a heavier right tail "
             "(long leisure or tourist trips pulling the average up)."
         )
+
+    # ── 2e: Hour × Day-of-Week Demand Surface ──
+    elif sub.startswith("2e"):
+        hm = (trips.groupby(["day_of_week","hour"]).size()
+              .unstack(fill_value=0)
+              .reindex(range(7), fill_value=0))
+        fig = px.imshow(hm.values,
+                        x=list(range(24)), y=DOW_LABELS,
+                        color_continuous_scale="Blues",
+                        labels=dict(x="Hour of Day", y="Day of Week", color="Trip Count"),
+                        aspect="auto")
+        fig.update_layout(**PLOTLY_LAYOUT, height=400,
+                          title="Hour \u00d7 Day-of-Week Demand Surface")
+        fig.update_xaxes(tickvals=list(range(0,24,2)),
+                         ticktext=[f"{h}:00" for h in range(0,24,2)])
+        st.plotly_chart(fig, use_container_width=True)
+
+    # ── 2h: Weather Sensitivity by Rider Segment ──
+    elif sub.startswith("2h"):
+        wx = daily.dropna(subset=["TAVG"])
+        fig = make_subplots(rows=1, cols=2,
+                            subplot_titles=["Temperature Sensitivity",
+                                            "Rain Impact by User Type"])
+        for utype, y_col, color in [("member", "member_rides", C_MEMBER),
+                                     ("casual", "casual_rides", C_CASUAL)]:
+            fig.add_trace(go.Scatter(x=wx["TAVG"], y=wx[y_col], mode="markers",
+                                     marker=dict(color=color, size=5, opacity=0.5),
+                                     name=utype.capitalize(), showlegend=True), row=1, col=1)
+            xs, ys, r = reg_line(wx["TAVG"].values, wx[y_col].values)
+            fig.add_trace(go.Scatter(x=xs, y=ys, mode="lines",
+                                     line=dict(color=color, width=2, dash="dash"),
+                                     name=f"{utype} fit (r={r:.2f})",
+                                     showlegend=True), row=1, col=1)
+        if "is_rainy" in daily.columns:
+            wx2 = daily.dropna(subset=["is_rainy"])
+            bars = []
+            for utype, y_col, color in [("member", "member_rides", C_MEMBER),
+                                         ("casual", "casual_rides", C_CASUAL)]:
+                dry   = wx2[wx2["is_rainy"]==0][y_col].mean()
+                rainy = wx2[wx2["is_rainy"]==1][y_col].mean()
+                bars.append(dict(utype=utype, dry=dry, rainy=rainy,
+                                 pct=-(dry-rainy)/dry*100, color=color))
+            fig.add_trace(go.Bar(x=[b["utype"].capitalize() for b in bars],
+                                 y=[b["dry"] for b in bars],
+                                 name="Dry days", marker_color=[b["color"] for b in bars],
+                                 opacity=0.85), row=1, col=2)
+            fig.add_trace(go.Bar(x=[b["utype"].capitalize() for b in bars],
+                                 y=[b["rainy"] for b in bars],
+                                 name="Rainy days",
+                                 marker_color=[b["color"] for b in bars],
+                                 opacity=0.45, marker_pattern_shape="/"), row=1, col=2)
+            for b in bars:
+                fig.add_annotation(x=b["utype"].capitalize(), y=b["rainy"]/2,
+                                   text=f"\u2212{b['pct']:.0f}%",
+                                   font=dict(color="white", size=11),
+                                   showarrow=False, row=1, col=2)
+        fig.update_layout(**PLOTLY_LAYOUT, height=430, barmode="group",
+                          title="Weather Sensitivity by User Type")
+        fig.update_xaxes(title_text="Avg Temp (\u00b0C)", row=1, col=1)
+        fig.update_yaxes(title_text="Daily Rides", row=1, col=1)
+        st.plotly_chart(fig, use_container_width=True)
 
 # ══════════════════════════════════════════════════════════
 # PAGE: SECTION 3 — SPATIAL
@@ -1003,7 +1155,7 @@ elif page == "3 \u2014 Spatial Analysis":
             "only chronically one-directional stations rank at the top."
         )
 
-    # ── 3c: Imbalance Map (signed_ratio) ──
+    # ── 3c: Imbalance Map (Folium, signed_ratio) ──
     elif sub.startswith("3c"):
         MIN_FLOW = 1000
         df_map = stations.dropna(subset=["lat", "lng"]).copy()
@@ -1012,30 +1164,53 @@ elif page == "3 \u2014 Spatial Analysis":
         df_map["signed_ratio"] = (df_map["net_flow"] /
                                   df_map["total_flow"].replace(0, np.nan)).fillna(0)
         df_map = df_map[df_map["total_flow"] >= MIN_FLOW].copy()
-        size_col = (df_map["total_flow"]
-                    .clip(upper=df_map["total_flow"].quantile(0.95))
-                    .pipe(lambda x: (x / x.max() * 25 + 3)))
 
-        fig = px.scatter_mapbox(
-            df_map,
-            lat="lat", lon="lng",
-            color="signed_ratio",
-            size=size_col,
-            color_continuous_scale="RdBu",
-            range_color=[-1, 1],
-            mapbox_style="open-street-map",
-            zoom=11,
-            hover_name="station_name",
-            hover_data={"signed_ratio": ":.2f", "total_flow": True,
-                        "lat": False, "lng": False},
-            labels={"signed_ratio": "Signed Ratio"},
+        # Percentile-based symmetric color scale (98th pct of |ratio|)
+        v = df_map["signed_ratio"].abs().quantile(0.98)
+        norm = mcolors.Normalize(vmin=-v, vmax=v)
+        cmap = mcm.get_cmap("RdBu")
+
+        def ratio_to_hex(r):
+            rgba = cmap(norm(np.clip(r, -v, v)))
+            return mcolors.to_hex(rgba)
+
+        # Dot radius: proportional to total_flow, capped at 95th pct
+        max_flow = df_map["total_flow"].clip(upper=df_map["total_flow"].quantile(0.95)).max()
+
+        def flow_to_radius(f):
+            return (min(f, df_map["total_flow"].quantile(0.95)) / max_flow) * 12 + 4
+
+        m = folium.Map(
+            location=[df_map["lat"].mean(), df_map["lng"].mean()],
+            zoom_start=12,
+            tiles="CartoDB positron",
         )
-        fig.update_layout(**PLOTLY_LAYOUT, height=600,
-                          title="Citi Bike Station Structural Imbalance Map<br>"
-                                "<sup>Red = structural exporter | Blue = structural importer | "
-                                "Pale = near-balanced</sup>",
-                          coloraxis_colorbar=dict(title="net_flow / total_flow"))
-        st.plotly_chart(fig, use_container_width=True)
+        for _, row in df_map.iterrows():
+            folium.CircleMarker(
+                location=[row["lat"], row["lng"]],
+                radius=flow_to_radius(row["total_flow"]),
+                color="none",
+                fill=True,
+                fill_color=ratio_to_hex(row["signed_ratio"]),
+                fill_opacity=0.75,
+                popup=folium.Popup(
+                    f"<b>{row['station_name']}</b><br>"
+                    f"Signed ratio: {row['signed_ratio']:+.3f}<br>"
+                    f"Net flow: {row['net_flow']:+,.0f}<br>"
+                    f"Departures: {row['total_departures']:,.0f}<br>"
+                    f"Arrivals: {row['total_arrivals']:,.0f}<br>"
+                    f"Total flow: {row['total_flow']:,.0f}",
+                    max_width=220,
+                ),
+                tooltip=row["station_name"],
+            ).add_to(m)
+
+        st.components.v1.html(m._repr_html_(), height=620, scrolling=False)
+        st.caption(
+            f"Colour = signed_ratio (net_flow / total_flow), clipped at ±{v:.4f} (98th pct)  ·  "
+            f"Red = net exporter · Blue = net importer · Dot size = total flow  ·  "
+            f"Stations shown: {len(df_map):,}"
+        )
 
     # ── 3d: AM vs PM Rush ──
     elif sub.startswith("3d"):
@@ -1126,122 +1301,13 @@ elif page == "3 \u2014 Spatial Analysis":
         )
 
 # ══════════════════════════════════════════════════════════
-# PAGE: SECTION 4 — ADVANCED
-# ══════════════════════════════════════════════════════════
-elif page == "4 \u2014 Advanced Analysis":
-    st.title("Section 4: Advanced Analysis")
-
-    CHART_DESCS = {
-        "4a \u2014 Hour × Day-of-Week Heatmap":
-            "A 7×24 demand surface showing trip volume for every combination of day of the week "
-            "and hour of the day, computed from the 100k trip sample. Darker cells = higher "
-            "demand. Two bright horizontal bands on weekdays (≈8 AM and ≈5–6 PM) reveal the "
-            "commuter rush; a broader midday-weekend band captures leisure usage.",
-        "4b \u2014 Weather Sensitivity by Rider Segment":
-            "Tests whether members and casual riders respond differently to weather shocks. "
-            "Left panel: temperature vs. daily rides for each user type with separate OLS "
-            "regression lines. Right panel: average rides on dry vs. rainy days per user type. "
-            "Casual riders are expected to be substantially more weather-sensitive because "
-            "their trips are discretionary.",
-    }
-    sub = st.selectbox("Select chart", list(CHART_DESCS.keys()))
-    st.caption(CHART_DESCS[sub])
-
-    # ── 4a: Heatmap ──
-    if sub.startswith("4a"):
-        hm = (trips.groupby(["day_of_week","hour"]).size()
-              .unstack(fill_value=0)
-              .reindex(range(7), fill_value=0))
-
-        fig = px.imshow(hm.values,
-                        x=list(range(24)), y=DOW_LABELS,
-                        color_continuous_scale="Blues",
-                        labels=dict(x="Hour of Day", y="Day of Week", color="Trip Count"),
-                        aspect="auto")
-        fig.update_layout(**PLOTLY_LAYOUT, height=400,
-                          title="Hour × Day-of-Week Demand Surface")
-        fig.update_xaxes(tickvals=list(range(0,24,2)),
-                         ticktext=[f"{h}:00" for h in range(0,24,2)])
-        st.plotly_chart(fig, use_container_width=True)
-
-    # ── 4b: Weather Sensitivity ──
-    elif sub.startswith("4b"):
-        wx = daily.dropna(subset=["TAVG"])
-        fig = make_subplots(rows=1, cols=2,
-                            subplot_titles=["Temperature Sensitivity",
-                                            "Rain Impact by User Type"])
-
-        for utype, y_col, color in [("member", "member_rides", C_MEMBER),
-                                     ("casual", "casual_rides", C_CASUAL)]:
-            fig.add_trace(go.Scatter(x=wx["TAVG"], y=wx[y_col], mode="markers",
-                                     marker=dict(color=color, size=5, opacity=0.5),
-                                     name=utype.capitalize(), showlegend=True), row=1, col=1)
-            xs, ys, r = reg_line(wx["TAVG"].values, wx[y_col].values)
-            fig.add_trace(go.Scatter(x=xs, y=ys, mode="lines",
-                                     line=dict(color=color, width=2, dash="dash"),
-                                     name=f"{utype} fit (r={r:.2f})",
-                                     showlegend=True), row=1, col=1)
-
-        if "is_rainy" in daily.columns:
-            wx2 = daily.dropna(subset=["is_rainy"])
-            bars = []
-            for utype, y_col, color in [("member", "member_rides", C_MEMBER),
-                                         ("casual", "casual_rides", C_CASUAL)]:
-                dry   = wx2[wx2["is_rainy"]==0][y_col].mean()
-                rainy = wx2[wx2["is_rainy"]==1][y_col].mean()
-                bars.append(dict(utype=utype, dry=dry, rainy=rainy,
-                                 pct=-(dry-rainy)/dry*100, color=color))
-            fig.add_trace(go.Bar(x=[b["utype"].capitalize() for b in bars],
-                                 y=[b["dry"] for b in bars],
-                                 name="Dry days", marker_color=[b["color"] for b in bars],
-                                 opacity=0.85), row=1, col=2)
-            fig.add_trace(go.Bar(x=[b["utype"].capitalize() for b in bars],
-                                 y=[b["rainy"] for b in bars],
-                                 name="Rainy days",
-                                 marker_color=[b["color"] for b in bars],
-                                 opacity=0.45, marker_pattern_shape="/"), row=1, col=2)
-            for b in bars:
-                fig.add_annotation(x=b["utype"].capitalize(), y=b["rainy"]/2,
-                                   text=f"−{b['pct']:.0f}%",
-                                   font=dict(color="white", size=11),
-                                   showarrow=False, row=1, col=2)
-
-        fig.update_layout(**PLOTLY_LAYOUT, height=430, barmode="group",
-                          title="Weather Sensitivity by User Type")
-        fig.update_xaxes(title_text="Avg Temp (°C)", row=1, col=1)
-        fig.update_yaxes(title_text="Daily Rides", row=1, col=1)
-        st.plotly_chart(fig, use_container_width=True)
-
-
-# ══════════════════════════════════════════════════════════
-# PAGE: INTERACTIVE MAP
-# ══════════════════════════════════════════════════════════
-elif page == "Interactive Map":
-    st.title("Station Imbalance \u2014 Interactive Map")
-    st.caption(
-        "Each circle represents one Citi Bike station. Circle colour encodes net flow direction "
-        "(red = exporter / bikes drain away, blue = importer / bikes accumulate). Circle size "
-        "encodes total trip activity. Click any station for its name and metrics. Pan and zoom "
-        "to explore specific neighbourhoods."
-    )
-    html_file = MAPS / "station_imbalance.html"
-    if html_file.exists():
-        st.components.v1.html(html_file.read_text(encoding="utf-8"), height=700, scrolling=True)
-    else:
-        st.warning("Map file not found: maps/station_imbalance.html — re-run Section 3c in the EDA notebook to generate it.")
-
-# ══════════════════════════════════════════════════════════
 # PAGE: CONCLUSIONS
 # ══════════════════════════════════════════════════════════
-elif page == "5 \u2014 Conclusions":
+elif page == "4 \u2014 Conclusions":
     st.title("Conclusions & Operational Recommendations")
-    st.markdown(
-        "Key findings derived from the full-year Citi Bike dataset (Mar 2025 – Feb 2026), "
-        "covering ~365 days of system-wide daily aggregates, 2,250 stations, and a 100k trip sample. "
-        "All statistics below are computed live from the loaded data."
-    )
-    st.markdown("---")
+    st.caption("Mar 2025 – Feb 2026 · ~28M trips · 2,250 stations · All statistics computed live from the loaded data.")
 
+    # ── Pre-compute stats ───────────────────────────────────
     peak_day   = daily.loc[daily["total_rides"].idxmax()]
     trough_day = daily.loc[daily["total_rides"].idxmin()]
     r_temp     = daily[["total_rides","TAVG"]].dropna().corr().iloc[0,1]
@@ -1259,130 +1325,131 @@ elif page == "5 \u2014 Conclusions":
     top_imp_stn = df_ib_filt[df_ib_filt["net_flow"] > 0].nlargest(1,"imbalance_ratio").iloc[0]
     g = gini(stations["total_departures"].values)
 
-    r1c1,r1c2,r1c3,r1c4 = st.columns(4)
-    r1c1.metric("Study Period",    f"{len(daily)} days")
-    r1c2.metric("Avg Daily Rides", f"{daily['total_rides'].mean():,.0f}")
-    r1c3.metric("Peak Day",        f"{peak_day['total_rides']:,.0f}",
-                peak_day["date"].strftime("%b %d"))
-    r1c4.metric("Trough Day",      f"{trough_day['total_rides']:,.0f}",
-                trough_day["date"].strftime("%b %d"))
+    # ── KPI metrics ─────────────────────────────────────────
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Study Period",              f"{len(daily)} days")
+    c2.metric("Avg Daily Rides",           f"{daily['total_rides'].mean():,.0f}")
+    c3.metric("Peak Day",                  f"{peak_day['total_rides']:,.0f}",
+              peak_day["date"].strftime("%b %d"))
+    c4.metric("Trough Day",                f"{trough_day['total_rides']:,.0f}",
+              trough_day["date"].strftime("%b %d"))
 
-    r2c1,r2c2,r2c3,r2c4 = st.columns(4)
-    r2c1.metric("Fall → Winter Drop",    f"{fall_drop:.0f}%",     delta_color="inverse")
-    r2c2.metric("Temp–Rides Correlation",f"{r_temp:.3f}")
-    r2c3.metric("High Imbalance Stns (>30%)", f"{n_high_imb}")
-    r2c4.metric("Station Traffic Gini",  f"{g:.2f}")
+    c5, c6, c7, c8 = st.columns(4)
+    c5.metric("Fall → Winter Drop",        f"{fall_drop:.0f}%",  delta_color="inverse")
+    c6.metric("Temp–Rides Correlation",    f"{r_temp:.3f}")
+    c7.metric("High Imbalance Stns (>30%)",f"{n_high_imb}")
+    c8.metric("Station Traffic Gini",      f"{g:.2f}")
 
     st.markdown("---")
-    st.subheader("Temporal Findings")
-    for title, body in [
-        ("Full seasonal cycle confirmed",
-         f"With a complete year of data, the demand arc is unambiguous: ridership rises through "
-         f"spring, peaks in summer, declines through autumn, and reaches a winter trough. "
-         f"The Fall-to-Winter drop alone is {fall_drop:.0f}%. Temperature is the dominant "
-         f"predictor (Pearson r = {r_temp:.3f} with daily rides), making it the single most "
-         f"important feature for any demand forecasting model."),
-        ("Bimodal commuter pattern",
-         "Weekday demand shows a clear bimodal shape with peaks at 8 AM and 5–6 PM, driven "
-         "primarily by members commuting to and from work. Casual riders follow a unimodal "
-         "midday distribution and concentrate heavily on weekends. These two behavioural profiles "
-         "have different weather sensitivity, price elasticity, and trip duration distributions — "
-         "they should be modelled separately rather than aggregated."),
-        ("Weather elasticity is quantifiable",
-         f"Each additional degree Celsius adds thousands of daily rides (see Section 2e for the "
-         f"exact slope). Rain suppresses demand by roughly 15–30% and the effect is statistically "
-         f"significant. Snow causes an even larger drop. Wind has a weaker effect. These "
-         f"elasticity estimates are directly actionable: a weather-aware forecast can reduce "
-         f"prediction error by 20–40% compared to a day-of-week-only baseline."),
-        ("Electric bike dominance",
-         f"Electric bikes account for {daily['pct_electric'].mean():.0f}% of all trips across "
-         f"the full year, and this share is relatively stable — suggesting adoption has plateaued "
-         f"rather than still growing. This creates a battery logistics sub-problem layered on top "
-         f"of the vehicle rebalancing problem: e-bikes must be recharged or swapped, adding "
-         f"time and location constraints to truck routing decisions."),
+
+    # ── Narrative synthesis ─────────────────────────────────
+    st.subheader("Synthesis")
+    for heading, body in [
+        ("Demand is predictable in structure, volatile in magnitude",
+         f"The seasonal cycle is the single most powerful demand driver: temperature explains the "
+         f"majority of daily ridership variance (r = {r_temp:.3f}), and the system swings nearly 3× "
+         f"between winter trough and summer peak. Within each season, intraday and day-of-week patterns "
+         f"are stable and repeatable — the weekday AM/PM commuter signal, the weekend midday leisure "
+         f"shift, and the overnight idle window are consistent structural features. A temperature-based "
+         f"seasonal model with a precipitation adjustment layer would capture the majority of operational "
+         f"demand variation."),
+        ("The system serves two distinct user populations with divergent needs",
+         f"Members (~84% of trips) are habitual, weather-resilient commuters making short, efficient "
+         f"trips; casuals are discretionary, weather-sensitive, and take longer rides concentrated on "
+         f"weekends and midday. These two segments respond differently to temperature, rain, pricing, "
+         f"and time-of-day — treating the system as a single undifferentiated user base would "
+         f"systematically mismatch resources to demand."),
+        ("Spatial imbalance is concentrated, geographically structured, and partially self-correcting",
+         f"Station utilisation is highly unequal (Gini = {g:.3f}): the top 20% of stations handle 61% "
+         f"of departures, while the bottom half contribute under 10%. The busiest stations are largely "
+         f"self-balancing — approximately half the network exhibits AM/PM commuter flow reversal that "
+         f"naturally returns bikes overnight. Chronic structural imbalance is concentrated in a distinct "
+         f"set of {n_high_imb} mid-volume residential-edge and terminal stations that cannot self-correct. "
+         f"Prioritising rebalancing resources toward these stations — ranked by imbalance ratio rather "
+         f"than volume — and scheduling interventions in the pre-AM-rush window would reduce total truck "
+         f"mileage while improving dock availability where it matters most."),
     ]:
-        st.markdown(f'<div class="finding-box"><strong>{title}.</strong> {body}</div>',
-                    unsafe_allow_html=True)
+        st.markdown(
+            f'<div class="narrative-box"><strong>{heading}.</strong> {body}</div>',
+            unsafe_allow_html=True)
 
     st.markdown("---")
-    st.subheader("Spatial Findings")
-    for title, body in [
-        ("Extreme station inequality",
-         f"The Gini coefficient for station departures is {g:.2f} — comparable to income "
-         f"inequality in highly unequal economies. A small fraction of hub stations handles a "
-         f"disproportionate share of total traffic. This means fleet allocation must be "
-         f"demand-proportional: spreading bikes and rebalancing resources evenly across all "
-         f"stations would dramatically over-serve low-traffic stations while under-serving hubs."),
-        ("Busiest ≠ most imbalanced",
-         f"The highest-volume stations tend to be self-balancing — their large gross flows "
-         f"offset each other through AM/PM commuter reversal. The chronically imbalanced "
-         f"stations (imbalance ratio > 30%) are a distinct set of {n_high_imb} mid-volume "
-         f"sites at residential edges or near one-directional attractors such as parks and "
-         f"ferry terminals. Ranking by imbalance ratio rather than absolute net flow correctly "
-         f"separates these two groups."),
-        ("Predictable commuter flow reversal",
-         "Many stations self-correct between AM and PM rush — they export bikes in the morning "
-         "as commuters depart and import them in the evening as commuters return. Rebalancing "
-         "operations should focus on the stations that do NOT reverse, as those accumulate or "
-         "deplete inventory irreversibly throughout the day."),
-        ("Geographic clustering",
-         f"Structural exporters cluster in residential zones (Brooklyn, outer boroughs) where "
-         f"people begin their commutes; importers concentrate in commercial cores (Midtown, "
-         f"Lower Manhattan) where commuters arrive. This pattern supports route planning. "
-         f"Most structurally imbalanced exporter: {top_exp_stn['station_name']} "
-         f"(ratio={top_exp_stn['imbalance_ratio']:.1%}). "
-         f"Most structurally imbalanced importer: {top_imp_stn['station_name']} "
-         f"(ratio={top_imp_stn['imbalance_ratio']:.1%})."),
-    ]:
-        st.markdown(f'<div class="finding-box"><strong>{title}.</strong> {body}</div>',
-                    unsafe_allow_html=True)
 
-    st.markdown("---")
-    st.subheader("Operational Recommendations")
-    for title, body in [
-        ("Seasonal fleet right-sizing",
-         f"Deploy the maximum fleet in summer when demand peaks; scale down significantly in "
-         f"winter (Fall-to-Winter drop: {fall_drop:.0f}%) to reduce idle-asset costs and "
-         f"maintenance burden. The optimal fleet size for each month should be set to meet a "
-         f"target service level (e.g., 95th-percentile daily demand) rather than the absolute "
-         f"peak, which would leave most bikes unused in winter."),
-        ("Spring re-deployment planning",
-         "The spring demand recovery is operationally as significant as the winter drawdown. "
-         "Bikes stored or decommissioned in winter must be inspected, recharged, and "
-         "repositioned before the seasonal uptick. Failing to pre-position leads to a "
-         "service gap during the early spring surge, exactly when casual riders are returning "
-         "to the system."),
-        ("Priority-based rebalancing",
-         "Use imbalance ratio to rank stations for rebalancing truck routing rather than "
-         "covering all stations uniformly. The small tail of high-ratio stations generates "
-         "the majority of the rebalancing workload — concentrating daily attention there "
-         "and reducing less-imbalanced stations to weekly or demand-triggered visits can "
-         "substantially reduce total truck mileage."),
-        ("Weather-adaptive scheduling",
-         "On days with forecast rain or snow, reduce rebalancing frequency (fewer bike moves "
-         "are needed because overall demand drops 15–30%) and redirect crew to maintenance "
-         "tasks and electric bike battery swaps. A simple weather-trigger rule — e.g., "
-         "\"if precipitation forecast > 5mm, reduce truck shifts by 30%\" — can improve "
-         "labour utilisation without degrading service on low-demand days."),
-    ]:
-        st.markdown(f'<div class="rec-box"><strong>{title}.</strong> {body}</div>',
-                    unsafe_allow_html=True)
+    # ── Findings + Recommendations in tabs ─────────────────
+    tab1, tab2, tab3 = st.tabs(["📈  Temporal Findings", "🗺️  Spatial Findings", "⚙️  Operational Recommendations"])
 
-    st.markdown("---")
-    st.subheader("Future Work")
-    st.markdown("""
-- **Predictive modelling:** Use the temporal features (day of week, month, season) and weather \
-  variables (TAVG, PRCP, SNOW) derived in this EDA as inputs to a regression or gradient-boosting \
-  model that forecasts daily and hourly demand at the station level.
-- **Rebalancing optimisation:** Formulate the truck routing problem as a Mixed-Integer Program (MIP) \
-  with time windows (pre-position before rush hours), vehicle capacity constraints, and stochastic \
-  demand drawn from the distributions characterised here.
-- **Dynamic pricing:** Use the weather and time-of-day elasticity coefficients to design surge pricing \
-  rules that shift demand from peak to off-peak periods, reducing the scale of the rebalancing problem.
-- **Extended data:** Incorporate real-time dock occupancy data to move from a reactive to a predictive \
-  rebalancing model.
-""")
-    st.caption("Data covers Mar 2025 – Feb 2026. Sources: Citi Bike trip records (GBFS) + NOAA GHCND daily weather (Central Park station).")
+    with tab1:
+        for num, title, body in [
+            (1, "Full seasonal cycle confirmed",
+             f"Demand rises from spring, peaks in summer, declines in autumn, and reaches a winter "
+             f"trough. Temperature is the dominant predictor (r ≈ {r_temp:.3f}); Fall-to-Winter drop: "
+             f"{fall_drop:.0f}%. A temperature-based seasonal model with a precipitation adjustment "
+             f"layer would capture the majority of operational demand variation."),
+            (2, "Bimodal commuter pattern",
+             "Weekday demand peaks at 8 AM and 5–6 PM (members), while casual riders peak at midday "
+             "and on weekends. These distinct profiles warrant separate operational schedules."),
+            (3, "Weather elasticity is quantifiable",
+             f"Each additional degree Celsius adds thousands of rides (r ≈ {r_temp:.3f}). Rain "
+             f"suppresses demand by ~15–30%; snow by even more. These inputs directly inform dynamic "
+             f"staffing and rebalancing frequency decisions."),
+            (4, "Electric dominance with plateaued adoption",
+             f"~{daily['pct_electric'].mean():.0f}% of trips use e-bikes year-round, with no sustained "
+             f"upward trend — adoption has stabilised. This layers a battery logistics sub-problem on "
+             f"top of vehicle rebalancing: e-bikes must be recharged or swapped, adding time and "
+             f"location constraints to truck routing decisions."),
+        ]:
+            st.markdown(f'<div class="finding-box"><strong>{num}. {title}.</strong> {body}</div>',
+                        unsafe_allow_html=True)
+
+    with tab2:
+        for num, title, body in [
+            (5, "Busiest ≠ most imbalanced",
+             f"The top stations by volume tend to be self-balancing through AM/PM reversal. The "
+             f"chronically imbalanced stations are a distinct set of {n_high_imb} mid-volume sites "
+             f"at residential edges or near one-directional attractors. Priority-based allocation "
+             f"using imbalance_ratio outperforms uniform coverage."),
+            (6, "Imbalance is structurally concentrated",
+             f"Station utilisation is highly unequal (Gini = {g:.3f}): the top 20% of stations handle "
+             f"61% of departures, while the bottom half contribute under 10%. A small tail of chronic "
+             f"offenders generates the majority of the rebalancing workload."),
+            (7, "Predictable commuter flow reversal",
+             f"AM exporters become PM importers, creating natural daily self-correction. "
+             f"Most imbalanced exporter: {top_exp_stn['station_name']} "
+             f"(ratio = {top_exp_stn['imbalance_ratio']:.1%}). "
+             f"Most imbalanced importer: {top_imp_stn['station_name']} "
+             f"(ratio = {top_imp_stn['imbalance_ratio']:.1%}). "
+             f"Rebalancing should focus on stations that do not reverse and on the pre-rush "
+             f"pre-positioning window."),
+            (8, "Geographic clustering is stable",
+             "Exporters cluster in residential zones (Brooklyn, outer boroughs); importers concentrate "
+             "in commercial cores (Midtown, Lower Manhattan). This pattern holds across all seasons "
+             "and supports route planning."),
+        ]:
+            st.markdown(f'<div class="finding-box"><strong>{num}. {title}.</strong> {body}</div>',
+                        unsafe_allow_html=True)
+
+    with tab3:
+        for num, title, body in [
+            (9, "Seasonal fleet right-sizing",
+             f"Deploy maximum fleet in summer; scale down for winter (Fall-to-Winter drop: "
+             f"{fall_drop:.0f}%) to reduce idle-asset costs while maintaining service levels. "
+             f"Set fleet size to meet a target service level (e.g., 95th-percentile daily demand) "
+             f"rather than the absolute peak."),
+            (10, "Weather-adaptive scheduling",
+             "On forecasted bad-weather days, reduce rebalancing frequency (overall demand drops "
+             "15–30%) and redirect crew to maintenance and e-bike battery swaps. A simple "
+             "weather-trigger rule can improve labour utilisation without degrading service on "
+             "low-demand days."),
+            (11, "Priority-based rebalancing",
+             "Use imbalance_ratio to rank stations for truck routing. The small tail of high-ratio "
+             "stations generates the majority of the rebalancing workload — concentrating daily "
+             "attention there and reducing less-imbalanced stations to weekly or demand-triggered "
+             "visits substantially reduces total truck mileage."),
+        ]:
+            st.markdown(f'<div class="rec-box"><strong>{num}. {title}.</strong> {body}</div>',
+                        unsafe_allow_html=True)
+
+    st.caption("Sources: Citi Bike trip records (GBFS) + NOAA GHCND daily weather (Central Park station).")
 
 # ══════════════════════════════════════════════════════════
 # PAGE: ASK THE DATA (LLM Agent)

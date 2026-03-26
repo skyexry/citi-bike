@@ -42,7 +42,7 @@ build_app_data.py  ← clean, feature-engineer, aggregate
 
 ```
 citi_bike/
-├── app.py                        # Streamlit dashboard (9 pages, 20+ charts + LLM agent)
+├── app.py                        # Streamlit dashboard (8 pages, 20+ charts + LLM agent)
 ├── build_app_data.py             # Reproduce data/app/*.csv from raw CSVs
 ├── requirements.txt
 ├── .streamlit/
@@ -50,7 +50,7 @@ citi_bike/
 │   └── secrets.toml              # API keys — gitignored, create manually
 ├── files/
 │   ├── 01_data_acquisition.ipynb
-│   └── 02_eda.ipynb              # Full EDA (Sections 1–5)
+│   └── 02_eda.ipynb              # Full EDA (Sections 1–4)
 ├── data/app/                     # Pre-built CSVs (committed)
 ├── figures/                      # Static PNG exports
 └── maps/                         # Folium HTML maps
@@ -87,13 +87,12 @@ Get a free NOAA token at [ncdc.noaa.gov/cdo-web/token](https://www.ncdc.noaa.gov
 
 ## EDA Coverage
 
-| Section | Topics |
+| Section | Subsections |
 |---|---|
-| **1 – Overview & Quality** | Missing values, summary stats, rider/bike type composition, duration distributions |
-| **2 – Temporal Demand** | Daily time series, hourly profiles, day-of-week, seasonal decomposition, weather × demand, rush-hour, e-bike adoption |
-| **3 – Spatial Demand** | Top stations, imbalance ranking, geographic map, AM/PM rush reversal, Lorenz curve & Gini |
-| **4 – Advanced** | Hour×day heatmap, weather sensitivity by rider segment |
-| **5 – Conclusions** | 12 key findings, operational recommendations (fleet sizing, rebalancing, weather-adaptive scheduling) |
+| **1 – Overview & Quality** | Missing values, summary stats, rider/bike type composition, distribution overview, trip duration by rider type |
+| **2 – Temporal Demand** | 2a Seasonal decomposition · 2b Daily trend & anomaly detection · 2c Day-of-week patterns · 2d Hourly demand profiles · 2e Hour×day demand surface · 2f Rush-hour analysis · 2g Weather×demand · 2h Weather sensitivity by segment · 2i Electric vs classic adoption · 2j Trip duration distribution |
+| **3 – Spatial Demand** | 3a Busiest stations · 3b Chronic station imbalance · 3c Geographic imbalance map · 3d AM/PM rush flow reversal · 3e Station utilization inequality (Lorenz/Gini) |
+| **4 – Conclusions** | Synthesis across three themes · 5 key findings · operational recommendations (fleet sizing, rebalancing, weather-adaptive scheduling) |
 
 ---
 
@@ -103,12 +102,11 @@ Get a free NOAA token at [ncdc.noaa.gov/cdo-web/token](https://www.ncdc.noaa.gov
 |---|---|
 | **Overview** | KPIs, daily volume, temperature vs. rides |
 | **Raw Data Explorer** | Filterable trip table with CSV download |
-| **1 – Distributions** | Rider/bike type, duration distributions |
-| **2 – Temporal** | 8 time-series and pattern charts |
-| **3 – Spatial** | Station rankings, imbalance, map, Lorenz curve |
-| **4 – Advanced** | Heatmap, weather sensitivity |
+| **1 – Distributions** | Rider/bike type composition, distribution overview, trip duration by rider type |
+| **2 – Temporal** | 10 charts: daily trend, hourly profiles, day-of-week, seasonal decomposition, hour×day heatmap, rush-hour, weather×demand, weather sensitivity by segment, e-bike adoption, trip duration |
+| **3 – Spatial** | Station rankings, chronic imbalance, geographic map, AM/PM rush reversal, Lorenz curve & Gini |
 | **Interactive Map** | Folium station imbalance map |
-| **5 – Conclusions** | Live-computed stats and recommendations |
+| **4 – Conclusions** | Live-computed stats, 5 key findings, operational recommendations |
 | **💬 Ask the Data** | LLM-powered Q&A agent (requires OpenAI key) |
 
 ---
