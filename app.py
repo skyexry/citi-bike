@@ -79,6 +79,10 @@ hr { border-color: #E2E8F0; margin: 1.5rem 0; }
     padding: 1.1rem 1.4rem; margin: .5rem 0 .8rem 0;
     border-radius: 10px; font-size: .92rem; line-height: 1.75; color: #1E293B;
 }
+.section-label {
+    font-size: .7rem; font-weight: 700; letter-spacing: .1em;
+    text-transform: uppercase; color: #94A3B8; margin: 1.4rem 0 .5rem 0;
+}
 
 [data-testid="stExpander"] { border: 1px solid #E2E8F0 !important; border-radius: 10px !important; }
 [data-testid="stDataFrame"] { border: 1px solid #E2E8F0; border-radius: 10px; overflow: hidden; }
@@ -1308,8 +1312,9 @@ elif page == "4 \u2014 Conclusions":
     st.caption("Mar 2025 – Feb 2026 · ~28M trips · 2,250 stations · All statistics computed live from the loaded data.")
 
     # ── Pre-compute stats ───────────────────────────────────
-    peak_day   = daily.loc[daily["total_rides"].idxmax()]
-    trough_day = daily.loc[daily["total_rides"].idxmin()]
+    valid_days = daily[daily["total_rides"] >= 1000]
+    peak_day   = valid_days.loc[valid_days["total_rides"].idxmax()]
+    trough_day = valid_days.loc[valid_days["total_rides"].idxmin()]
     r_temp     = daily[["total_rides","TAVG"]].dropna().corr().iloc[0,1]
     fall_avg   = daily[daily["season"]=="Fall"]["total_rides"].mean()
     winter_avg = daily[daily["season"]=="Winter"]["total_rides"].mean()
@@ -1325,129 +1330,93 @@ elif page == "4 \u2014 Conclusions":
     top_imp_stn = df_ib_filt[df_ib_filt["net_flow"] > 0].nlargest(1,"imbalance_ratio").iloc[0]
     g = gini(stations["total_departures"].values)
 
-    # ── KPI metrics ─────────────────────────────────────────
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Study Period",              f"{len(daily)} days")
-    c2.metric("Avg Daily Rides",           f"{daily['total_rides'].mean():,.0f}")
-    c3.metric("Peak Day",                  f"{peak_day['total_rides']:,.0f}",
-              peak_day["date"].strftime("%b %d"))
-    c4.metric("Trough Day",                f"{trough_day['total_rides']:,.0f}",
-              trough_day["date"].strftime("%b %d"))
+    # ── Synthesis ────────────────────────────────────────────
+    st.markdown('<p class="section-label">Synthesis</p>', unsafe_allow_html=True)
+    st.markdown(
+        f'<div class="narrative-box"><strong>Demand is predictable in structure, volatile in magnitude.</strong> '
+        f'The seasonal cycle is the single most powerful demand driver: temperature explains the majority of daily '
+        f'ridership variance (r = {r_temp:.3f}), and the system swings nearly 3× between winter trough and summer '
+        f'peak. Within each season, intraday and day-of-week patterns are stable — the weekday AM/PM commuter '
+        f'signal, the weekend midday leisure shift, and the overnight idle window are consistent structural features. '
+        f'A temperature-based seasonal model with a precipitation adjustment layer would capture the majority of '
+        f'operational demand variation.</div>',
+        unsafe_allow_html=True)
+    st.markdown(
+        f'<div class="narrative-box"><strong>The system serves two distinct user populations with divergent needs.</strong> '
+        f'Members (~84% of trips) are habitual, weather-resilient commuters making short, efficient trips; casuals '
+        f'are discretionary, weather-sensitive, and take longer rides concentrated on weekends and midday. These two '
+        f'segments respond differently to temperature, rain, pricing, and time-of-day — treating the system as a '
+        f'single undifferentiated user base would systematically mismatch resources to demand.</div>',
+        unsafe_allow_html=True)
+    st.markdown(
+        f'<div class="narrative-box"><strong>Spatial imbalance is concentrated, geographically structured, and partially self-correcting.</strong> '
+        f'Station utilisation is highly unequal (Gini = {g:.3f}): the top 20% of stations handle 61% of departures, '
+        f'while the bottom half contribute under 10%. The busiest stations are largely self-balancing through AM/PM '
+        f'commuter flow reversal. Chronic structural imbalance is concentrated in a distinct set of {n_high_imb} '
+        f'mid-volume residential-edge and terminal stations. Prioritising rebalancing resources toward these stations '
+        f'— ranked by imbalance ratio rather than volume — and scheduling interventions in the pre-AM-rush window '
+        f'would reduce total truck mileage while improving dock availability where it matters most.</div>',
+        unsafe_allow_html=True)
 
-    c5, c6, c7, c8 = st.columns(4)
-    c5.metric("Fall → Winter Drop",        f"{fall_drop:.0f}%",  delta_color="inverse")
-    c6.metric("Temp–Rides Correlation",    f"{r_temp:.3f}")
-    c7.metric("High Imbalance Stns (>30%)",f"{n_high_imb}")
-    c8.metric("Station Traffic Gini",      f"{g:.2f}")
+    # ── Key Findings ─────────────────────────────────────────
+    st.markdown('<p class="section-label">Key Findings</p>', unsafe_allow_html=True)
+    col_t, col_s = st.columns(2)
 
-    st.markdown("---")
-
-    # ── Narrative synthesis ─────────────────────────────────
-    st.subheader("Synthesis")
-    for heading, body in [
-        ("Demand is predictable in structure, volatile in magnitude",
-         f"The seasonal cycle is the single most powerful demand driver: temperature explains the "
-         f"majority of daily ridership variance (r = {r_temp:.3f}), and the system swings nearly 3× "
-         f"between winter trough and summer peak. Within each season, intraday and day-of-week patterns "
-         f"are stable and repeatable — the weekday AM/PM commuter signal, the weekend midday leisure "
-         f"shift, and the overnight idle window are consistent structural features. A temperature-based "
-         f"seasonal model with a precipitation adjustment layer would capture the majority of operational "
-         f"demand variation."),
-        ("The system serves two distinct user populations with divergent needs",
-         f"Members (~84% of trips) are habitual, weather-resilient commuters making short, efficient "
-         f"trips; casuals are discretionary, weather-sensitive, and take longer rides concentrated on "
-         f"weekends and midday. These two segments respond differently to temperature, rain, pricing, "
-         f"and time-of-day — treating the system as a single undifferentiated user base would "
-         f"systematically mismatch resources to demand."),
-        ("Spatial imbalance is concentrated, geographically structured, and partially self-correcting",
-         f"Station utilisation is highly unequal (Gini = {g:.3f}): the top 20% of stations handle 61% "
-         f"of departures, while the bottom half contribute under 10%. The busiest stations are largely "
-         f"self-balancing — approximately half the network exhibits AM/PM commuter flow reversal that "
-         f"naturally returns bikes overnight. Chronic structural imbalance is concentrated in a distinct "
-         f"set of {n_high_imb} mid-volume residential-edge and terminal stations that cannot self-correct. "
-         f"Prioritising rebalancing resources toward these stations — ranked by imbalance ratio rather "
-         f"than volume — and scheduling interventions in the pre-AM-rush window would reduce total truck "
-         f"mileage while improving dock availability where it matters most."),
-    ]:
-        st.markdown(
-            f'<div class="narrative-box"><strong>{heading}.</strong> {body}</div>',
-            unsafe_allow_html=True)
-
-    st.markdown("---")
-
-    # ── Findings + Recommendations in tabs ─────────────────
-    tab1, tab2, tab3 = st.tabs(["📈  Temporal Findings", "🗺️  Spatial Findings", "⚙️  Operational Recommendations"])
-
-    with tab1:
+    with col_t:
+        st.markdown("**Temporal**")
         for num, title, body in [
-            (1, "Full seasonal cycle confirmed",
-             f"Demand rises from spring, peaks in summer, declines in autumn, and reaches a winter "
-             f"trough. Temperature is the dominant predictor (r ≈ {r_temp:.3f}); Fall-to-Winter drop: "
-             f"{fall_drop:.0f}%. A temperature-based seasonal model with a precipitation adjustment "
-             f"layer would capture the majority of operational demand variation."),
+            (1, "Full seasonal cycle",
+             f"Demand peaks in summer, troughs in winter. Fall-to-Winter drop: {fall_drop:.0f}%. "
+             f"Temperature (r = {r_temp:.3f}) is the dominant predictor."),
             (2, "Bimodal commuter pattern",
-             "Weekday demand peaks at 8 AM and 5–6 PM (members), while casual riders peak at midday "
-             "and on weekends. These distinct profiles warrant separate operational schedules."),
+             "Members peak at 8 AM and 5–6 PM on weekdays. Casual riders peak at midday and on weekends. "
+             "These profiles warrant separate operational schedules."),
             (3, "Weather elasticity is quantifiable",
-             f"Each additional degree Celsius adds thousands of rides (r ≈ {r_temp:.3f}). Rain "
-             f"suppresses demand by ~15–30%; snow by even more. These inputs directly inform dynamic "
-             f"staffing and rebalancing frequency decisions."),
-            (4, "Electric dominance with plateaued adoption",
-             f"~{daily['pct_electric'].mean():.0f}% of trips use e-bikes year-round, with no sustained "
-             f"upward trend — adoption has stabilised. This layers a battery logistics sub-problem on "
-             f"top of vehicle rebalancing: e-bikes must be recharged or swapped, adding time and "
-             f"location constraints to truck routing decisions."),
+             f"Rain suppresses demand ~15–30%; snow by more. "
+             f"Each additional °C adds thousands of rides. Directly informs dynamic staffing decisions."),
+            (4, "Electric adoption has plateaued",
+             f"~{daily['pct_electric'].mean():.0f}% of trips use e-bikes year-round with no sustained growth trend. "
+             f"Creates a battery logistics sub-problem layered on top of vehicle rebalancing."),
         ]:
             st.markdown(f'<div class="finding-box"><strong>{num}. {title}.</strong> {body}</div>',
                         unsafe_allow_html=True)
 
-    with tab2:
+    with col_s:
+        st.markdown("**Spatial**")
         for num, title, body in [
-            (5, "Busiest ≠ most imbalanced",
-             f"The top stations by volume tend to be self-balancing through AM/PM reversal. The "
-             f"chronically imbalanced stations are a distinct set of {n_high_imb} mid-volume sites "
-             f"at residential edges or near one-directional attractors. Priority-based allocation "
-             f"using imbalance_ratio outperforms uniform coverage."),
-            (6, "Imbalance is structurally concentrated",
-             f"Station utilisation is highly unequal (Gini = {g:.3f}): the top 20% of stations handle "
-             f"61% of departures, while the bottom half contribute under 10%. A small tail of chronic "
-             f"offenders generates the majority of the rebalancing workload."),
-            (7, "Predictable commuter flow reversal",
-             f"AM exporters become PM importers, creating natural daily self-correction. "
-             f"Most imbalanced exporter: {top_exp_stn['station_name']} "
-             f"(ratio = {top_exp_stn['imbalance_ratio']:.1%}). "
-             f"Most imbalanced importer: {top_imp_stn['station_name']} "
-             f"(ratio = {top_imp_stn['imbalance_ratio']:.1%}). "
-             f"Rebalancing should focus on stations that do not reverse and on the pre-rush "
-             f"pre-positioning window."),
+            (5, "Busiest \u2260 most imbalanced",
+             f"High-volume hubs self-balance via AM/PM reversal. The {n_high_imb} chronically imbalanced "
+             f"stations are a distinct mid-volume set at residential edges and terminal attractors."),
+            (6, "Utilisation is highly concentrated",
+             f"Gini = {g:.3f}. Top 20% of stations handle 61% of departures; bottom 50% under 10%. "
+             f"A small tail of chronic offenders generates the majority of the rebalancing workload."),
+            (7, "Commuter flow reversal is predictable",
+             f"AM exporters become PM importers — natural daily self-correction. "
+             f"Most imbalanced exporter: {top_exp_stn['station_name']} ({top_exp_stn['imbalance_ratio']:.1%}). "
+             f"Most imbalanced importer: {top_imp_stn['station_name']} ({top_imp_stn['imbalance_ratio']:.1%})."),
             (8, "Geographic clustering is stable",
-             "Exporters cluster in residential zones (Brooklyn, outer boroughs); importers concentrate "
-             "in commercial cores (Midtown, Lower Manhattan). This pattern holds across all seasons "
-             "and supports route planning."),
+             "Exporters cluster in residential zones (Brooklyn, outer boroughs); importers in commercial "
+             "cores (Midtown, Lower Manhattan). Pattern is consistent across all seasons."),
         ]:
             st.markdown(f'<div class="finding-box"><strong>{num}. {title}.</strong> {body}</div>',
                         unsafe_allow_html=True)
 
-    with tab3:
-        for num, title, body in [
-            (9, "Seasonal fleet right-sizing",
-             f"Deploy maximum fleet in summer; scale down for winter (Fall-to-Winter drop: "
-             f"{fall_drop:.0f}%) to reduce idle-asset costs while maintaining service levels. "
-             f"Set fleet size to meet a target service level (e.g., 95th-percentile daily demand) "
-             f"rather than the absolute peak."),
-            (10, "Weather-adaptive scheduling",
-             "On forecasted bad-weather days, reduce rebalancing frequency (overall demand drops "
-             "15–30%) and redirect crew to maintenance and e-bike battery swaps. A simple "
-             "weather-trigger rule can improve labour utilisation without degrading service on "
-             "low-demand days."),
-            (11, "Priority-based rebalancing",
-             "Use imbalance_ratio to rank stations for truck routing. The small tail of high-ratio "
-             "stations generates the majority of the rebalancing workload — concentrating daily "
-             "attention there and reducing less-imbalanced stations to weekly or demand-triggered "
-             "visits substantially reduces total truck mileage."),
-        ]:
-            st.markdown(f'<div class="rec-box"><strong>{num}. {title}.</strong> {body}</div>',
-                        unsafe_allow_html=True)
+    # ── Operational Recommendations ──────────────────────────
+    st.markdown('<p class="section-label">Operational Recommendations</p>', unsafe_allow_html=True)
+    r1, r2, r3 = st.columns(3)
+    for col, num, title, body in [
+        (r1, 9,  "Seasonal fleet right-sizing",
+         f"Deploy maximum fleet in summer; scale down for winter ({fall_drop:.0f}% demand drop) "
+         f"to reduce idle-asset costs. Size to 95th-percentile demand, not the absolute peak."),
+        (r2, 10, "Weather-adaptive scheduling",
+         "On forecasted rain or snow days, reduce rebalancing frequency (demand drops 15–30%) "
+         "and redirect crew to maintenance and e-bike battery swaps."),
+        (r3, 11, "Priority-based rebalancing",
+         "Rank stations by imbalance_ratio, not volume. The small tail of high-ratio stations "
+         "generates most of the rebalancing workload — daily attention there, weekly elsewhere."),
+    ]:
+        col.markdown(f'<div class="rec-box"><strong>{num}. {title}.</strong> {body}</div>',
+                     unsafe_allow_html=True)
 
     st.caption("Sources: Citi Bike trip records (GBFS) + NOAA GHCND daily weather (Central Park station).")
 
