@@ -2,7 +2,9 @@
 
 Full-year (Mar 2025 – Feb 2026) analysis of NYC Citi Bike ridership: data pipeline, EDA, and an interactive Streamlit dashboard.
 
-**Stack:** Python · Pandas · NumPy · Matplotlib · Seaborn · Scipy · Plotly · Streamlit · OpenAI API · NOAA CDO API
+**Live demo:** https://citi-bike.streamlit.app/
+
+**Stack:** Python · Pandas · NumPy · Matplotlib · Seaborn · Scipy · Plotly · Folium · Streamlit · OpenAI API · NOAA CDO API
 
 ---
 
@@ -42,7 +44,7 @@ build_app_data.py  ← clean, feature-engineer, aggregate
 
 ```
 citi_bike/
-├── app.py                        # Streamlit dashboard (8 pages, 20+ charts + LLM agent)
+├── app.py                        # Streamlit dashboard (7 pages, 20+ charts + LLM agent)
 ├── build_app_data.py             # Reproduce data/app/*.csv from raw CSVs
 ├── requirements.txt
 ├── .streamlit/
@@ -104,9 +106,8 @@ Get a free NOAA token at [ncdc.noaa.gov/cdo-web/token](https://www.ncdc.noaa.gov
 | **Raw Data Explorer** | Filterable trip table with CSV download |
 | **1 – Distributions** | Rider/bike type composition, distribution overview, trip duration by rider type |
 | **2 – Temporal** | 10 charts: daily trend, hourly profiles, day-of-week, seasonal decomposition, hour×day heatmap, rush-hour, weather×demand, weather sensitivity by segment, e-bike adoption, trip duration |
-| **3 – Spatial** | Station rankings, chronic imbalance, geographic map, AM/PM rush reversal, Lorenz curve & Gini |
-| **Interactive Map** | Folium station imbalance map |
-| **4 – Conclusions** | Live-computed stats, 5 key findings, operational recommendations |
+| **3 – Spatial** | Station rankings, chronic imbalance, Folium imbalance map (signed ratio), AM/PM rush reversal, Lorenz curve & Gini |
+| **4 – Conclusions** | Synthesis narrative, 8 key findings (temporal + spatial), 3 operational recommendations |
 | **💬 Ask the Data** | LLM-powered Q&A agent (requires OpenAI key) |
 
 ---
